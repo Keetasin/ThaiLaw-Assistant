@@ -1,0 +1,50 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# --- Secrets ---
+.env
+*.env.local
+credentials.json
+
+# --- Data (large / generated, keep curated CSVs and gold test set) ---
+data/raw/
+data/clean/
+data/chunks.jsonl
+!data/curated/
+eval/results/
+
+# --- Vector / Graph store dumps ---
+chroma_db/
+*.sqlite3
+neo4j_data/
+neo4j/data/
+neo4j/logs/
+
+# --- Ollama / model caches ---
+.ollama/
+models/*.gguf
+
+# --- Logs / traces ---
+*.log
+logs/
+*.jsonl.log
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Tunnel binary keep, but ignore its runtime state ---
+.cloudflared/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
