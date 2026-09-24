@@ -43,7 +43,8 @@ Thumbs.db
 .vscode/
 .idea/
 
-# --- Tunnel binary keep, but ignore its runtime state ---
+# --- Tunnel binary: download fresh instead of committing (54MB) ---
+cloudflared.exe
 .cloudflared/
 
 # --- Jupyter ---

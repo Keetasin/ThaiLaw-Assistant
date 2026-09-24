@@ -17,7 +17,8 @@
 | dotBlue API key | — | ขอจากระบบ PSU dotBlue |
 | GPU (option) | `nvidia-smi` | driver + CUDA สำหรับ RTX 3050 |
 
-`cloudflared.exe` มีอยู่แล้วที่ root ของ repo นี้ (ไม่ต้องติดตั้งเพิ่ม)
+`cloudflared.exe` **ไม่ได้ commit ไว้** (ไฟล์ ~54MB, ไม่ใช่โค้ดโปรเจกต์) — ดาวน์โหลดเองครั้งเดียวมาวางที่ root ของ repo:
+https://github.com/cloudflare/cloudflared/releases/latest → ไฟล์ `cloudflared-windows-amd64.exe` → เปลี่ยนชื่อเป็น `cloudflared.exe`
 
 ---
 
