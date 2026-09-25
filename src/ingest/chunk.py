@@ -1,55 +1,96 @@
-"""Stable JSONL chunk builder for statutes."""
-from __future__ import annotations
-import argparse, json, re
-from collections import Counter
-from datetime import date
-from pathlib import Path
+"""Chunk parsed sections into data/chunks.jsonl (per PLAN.md §2.4 schema) and
+data/sections.json (whole-section lookup for engine.py's small-to-big
+expand() — has no spec in PLAN.md, key = section_key, see docstring there).
 
-REF_RE = re.compile(r"มาตรา\s*([๐-๙0-9]+(?:\s*/\s*[๐-๙0-9]+)?)")
-THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+Chunking rule (PLAN.md §2.3): keep each มาตรา as one chunk normally; split
+into paragraph-sized pieces only when a section runs long enough that a
+single embedding would blur multiple distinct clauses together. ~800 tokens
+is the PLAN.md threshold; Thai has no whitespace-delimited tokens so this is
+approximated as a character-count threshold (measured empirically: only 4 of
+187 sections exceed it, the longest being มาตรา 5's ~30-term definitions
+list at 3348 chars).
+"""
+import json
+import re
 
-def _tokens(text: str) -> int: return max(1, len(re.findall(r"\S+", text)))
-def _refs(text: str, current: str) -> list[str]:
-    refs = {x.translate(THAI_DIGITS).replace(" ", "") for x in REF_RE.findall(text)}; refs.discard(current)
-    return sorted(refs, key=lambda x: tuple(int(p) for p in x.split("/")))
+from src import config
+from src.ingest.parse_sections import LAW_ID, LAW_NAME, parse_sections
 
-def create_chunks(sections: list[dict], law_id: str, law_name: str, source_url: str,
-                  retrieved_date: str | None = None, max_tokens: int = 800,
-                  doc_type: str = "statute") -> list[dict]:
-    result, retrieved, occurrences = [], retrieved_date or date.today().isoformat(), Counter()
-    for section in sections:
-        number, text = str(section["section_no"]).translate(THAI_DIGITS), section["text"].strip()
-        occurrences[number] += 1
-        paragraphs, pieces, current, size = section.get("paragraphs") or text.splitlines(), [], [], 0
-        if _tokens(text) <= max_tokens: pieces = [text]
-        else:
-            for paragraph in paragraphs:
-                if current and size + _tokens(paragraph) > max_tokens: pieces.append("\n".join(current)); current, size = [], 0
-                current.append(paragraph); size += _tokens(paragraph)
-            if current: pieces.append("\n".join(current))
-        for index, piece in enumerate(pieces or [text], 1):
-            version = "" if occurrences[number] == 1 else f"-v{occurrences[number]}"
-            result.append({"chunk_id": f"{law_id}-s{number}{version}-p{index}", "law_id": law_id,
-                "law_name": law_name, "chapter": section.get("chapter", "ไม่ระบุหมวด"),
-                "section_no": number, "paragraph": index, "doc_type": doc_type,
-                "status": section.get("status", "in_force"), "amended_by": section.get("amended_by", []),
-                "version": section.get("version"), "refs_out": _refs(piece, number),
-                "source_url": source_url, "retrieved_date": retrieved, "text": piece})
-    return result
+SOURCE_URL = "https://legal.labour.go.th/images/law/Protection2541/2568_protectionpdf.pdf"
+RETRIEVED_DATE = "2025-12-11"  # from the source PDF's own footer timestamp (11/12/68 13:54, พ.ศ.2568)
+SPLIT_THRESHOLD_CHARS = 1600
 
-def write_chunks(chunks: list[dict], output_file: str | Path) -> None:
-    ids = [x["chunk_id"] for x in chunks]
-    if len(ids) != len(set(ids)): raise ValueError("duplicate chunk_id")
-    target = Path(output_file); target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in chunks), encoding="utf-8")
+SUBITEM_SPLIT_RE = re.compile(r"\n(?=\(\d+\)\s)")
 
-def create_chunks_and_metadata(input_file: str, output_file: str, law_id: str, law_name: str, source_url: str) -> list[dict]:
-    sections = json.loads(Path(input_file).read_text(encoding="utf-8")); chunks = create_chunks(sections, law_id, law_name, source_url)
-    write_chunks(chunks, output_file); return chunks
 
-def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("input_file"); parser.add_argument("output_file"); parser.add_argument("--law-id", required=True); parser.add_argument("--law-name", required=True); parser.add_argument("--source-url", required=True)
-    args = parser.parse_args(); print(f"wrote {len(create_chunks_and_metadata(args.input_file, args.output_file, args.law_id, args.law_name, args.source_url))} chunks")
+def _split_long_section(text):
+    """Blank-line paragraphs first; if the section has none (single flowing
+    block, e.g. a long enumeration like มาตรา 5), fall back to splitting at
+    each numbered sub-item "(1)/(2)/..." boundary. If neither applies, keep
+    it as one piece — better one oversized chunk than a wrong split."""
+    if len(text) <= SPLIT_THRESHOLD_CHARS:
+        return [text]
+
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if len(paragraphs) > 1:
+        return paragraphs
+
+    subitems = [p.strip() for p in SUBITEM_SPLIT_RE.split(text) if p.strip()]
+    if len(subitems) > 1:
+        return subitems
+
+    return [text]
+
+
+def build_chunks_and_sections():
+    sections = parse_sections()
+    chunks = []
+    sections_out = {}
+
+    for sec in sections:
+        section_key = f"{LAW_ID}-s{sec['section_no']}"
+        pieces = _split_long_section(sec["text"])
+
+        for i, piece in enumerate(pieces, 1):
+            chunks.append({
+                "chunk_id": f"{section_key}-p{i}",
+                "section_key": section_key,
+                "law_id": LAW_ID,
+                "law_name": LAW_NAME,
+                "chapter": sec["chapter"],
+                "section_no": sec["section_no"],
+                "paragraph": i,
+                "doc_type": "statute",
+                "status": sec["status"],
+                "amended_by": sec["amended_by"],
+                "refs_out": sec["refs_out"],
+                "source_url": SOURCE_URL,
+                "retrieved_date": RETRIEVED_DATE,
+                "text": piece,
+            })
+
+        sections_out[section_key] = {
+            "section_key": section_key,
+            "law_id": LAW_ID,
+            "law_name": LAW_NAME,
+            "chapter": sec["chapter"],
+            "section_no": sec["section_no"],
+            "status": sec["status"],
+            "source_url": SOURCE_URL,
+            "text": sec["text"],
+        }
+
+    with open(config.CHUNKS_PATH, "w", encoding="utf-8") as f:
+        for c in chunks:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+
+    with open(config.SECTIONS_PATH, "w", encoding="utf-8") as f:
+        json.dump(sections_out, f, ensure_ascii=False, indent=2)
+
+    print(f"wrote {len(chunks)} chunks ({len(sections)} sections) -> {config.CHUNKS_PATH}")
+    print(f"wrote {len(sections_out)} sections -> {config.SECTIONS_PATH}")
+    return chunks, sections_out
+
 
 if __name__ == "__main__":
-    main()
+    build_chunks_and_sections()

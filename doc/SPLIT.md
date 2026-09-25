@@ -33,20 +33,24 @@
 ## Day 2 — Core pipelines
 
 ### คน A — Graph build
-- [x] `src/ingest/parse_sections.py`: regex parse หมวด→มาตรา→วรรค/อนุมาตรา, detect "(ยกเลิก)"/"แก้ไขโดย"
-- [x] `src/ingest/chunk.py`: chunk ตามมาตรา + metadata schema (PLAN.md 2.4) → `data/chunks.jsonl`
-- [x] `src/index/build_graph.py`: deterministic edges (HAS_SECTION, REFERS_TO, PENALIZED_BY, DEFINES)
-- [x] `src/index/extract_triples.py`: LLM extraction (Right/Duty/Penalty/Topic/Actor) ด้วย PSU-gemma ฟรี, ontology validation (adapt จาก `build_kg.py`)
-- [x] curate Topic taxonomy ~30 หัวข้อ + CSV (Topic→Agency/Evidence/Form/Step)
-- **ส่งท้ายวัน**: `chunks.jsonl` พร้อม, กราฟพื้นฐานอยู่ใน Neo4j (Law/Section/REFERS_TO/PENALIZED_BY)
+
+- [X] `src/ingest/parse_sections.py`: regex parse หมวด→มาตรา + detect "(ยกเลิก)"/"แก้ไขโดย" — **ทำแบบย่อ** (แค่พอปลดบล็อก B, ไม่ทำ วรรค/อนุมาตรา ละเอียด) เจอ+แก้บั๊กจริงระหว่างทาง: wrapped-citation line ("...ตามมาตรา\nมาตรา 25 มาตรา 26...") ถูกนับเป็นมาตราใหม่ผิดๆ (187→209 sections ปลอม) — แก้ด้วย sequential-continuity check (เลขมาตราต้องเรียงต่อเนื่องไม่มีช่องว่างจริงตามธรรมชาติกฎหมายไทย) ได้ 187 ตรงกับที่นับมือไว้
+- [X] `src/ingest/chunk.py`: chunk ตามมาตรา (+ แยก sub-item ถ้ายาวเกิน ~800 tokens, มาตรา 118 แยกเป็น (1)-(6) อัตโนมัติ) + metadata schema (PLAN.md 2.4 + `section_key` เพิ่มที่จำเป็นสำหรับ `engine.py.expand()`) → `data/chunks.jsonl` (195 chunks) + `data/sections.json` (187, ไม่มี spec ใน PLAN.md ออกแบบเอง)
+- [ ] `src/index/build_graph.py`, `extract_triples.py`, Topic taxonomy — **ยังไม่ทำ** (Graph จริงเป็นงาน Day3 ของ A ตาม SPLIT.md เดิม, ที่ทำวันนี้แค่พอให้ B ไม่ค้าง)
+
+- **ส่งท้ายวัน**: `chunks.jsonl`/`sections.json` พร้อมใช้จริง, กราฟยังไม่เริ่ม (ตามแผนเดิมของ Day3)
 
 ### คน B — Dense RAG end-to-end
-- [x] `src/index/build_vector.py`: embed ด้วย bge-m3 → ChromaDB (ใช้ `chunks.jsonl` จาก A ทันทีที่มี)
-- [x] `src/index/build_bm25.py`: BM25 word (PyThaiNLP newmm) + char 3-gram
-- [x] ต่อ `retriever.py` (reuse) เข้ากับ chunks ใหม่, ทดสอบ query 5 ข้อ
-- [x] `src/app/flex.py`: Flex Message การ์ดคำตอบ (สิทธิ/มาตรา/หลักฐาน/หน่วยงาน/ขั้นตอน/แหล่งอ้างอิง/คำเตือน)
-- [x] เริ่ม `src/retrieval/router.py` โครง MoE (Pydantic `RouteDecision`)
-- **ส่งท้ายวัน**: ถาม LINE บอทแล้วได้คำตอบจาก Dense RAG จริง พร้อม Flex card
+
+- [X] `src/index/build_vector.py`: embed ด้วย bge-m3 (CPU) → ChromaDB collection `law` — index 195 chunks จริง, ทดสอบแล้ว
+- [X] `src/index/build_bm25.py`: BM25 word (PyThaiNLP newmm) + char 3-gram → `data/bm25.pkl` — **เจอ+แก้บั๊กจริง**: index raw text อย่างเดียวทำให้ query "มาตรา 61" หา section 61 ไม่เจอเลย (เนื้อหามาตราไม่พูดเลขตัวเองซ้ำ) เปลี่ยนไป index `passage_text()` ที่มี label "มาตรา N" ติดด้วย
+- [X] ต่อ `retriever.py` เข้ากับ chunks จริง, ทดสอบ 5 query จริง — **4/5 ตอบถูกมีอ้างอิงชัดเจน**, 1/5 (query แบบเลขมาตราล้วนๆ "มาตรา 61 คืออะไร") retrieval พลาด section ที่ถูกต้อง → LLM ตอบ "ไม่พบข้อมูล" — root cause เป็นจุดที่ PLAN.md เตือนไว้เอง (dense อ่อนกับ query แบบเลขมาตรา + `dynamic_k`/`TAU_*` ยังไม่ retune) **บันทึกไว้เป็น known gap สำหรับ Day4 eval ไม่แก้ตอนนี้**
+- [X] แก้ field mismatch ที่เจอใน `reranker.py`/`generator.py`/`tracing.py` (ของเดิมจาก Project2 ใช้ `heading`/`section`/`pages` ไม่ตรง chunk schema ใหม่) — `generator.py` เขียน prompt+citation ใหม่ทั้งหมดเป็น `[มาตรา X]` ตรงๆ (ตัด synthetic index `[n]` เดิมทิ้ง เพราะเลขมาตราเป็น real identifier อยู่แล้ว)
+- [X] `src/app/flex.py`: Flex card สิทธิ/มาตรา/แหล่งอ้างอิง+ปุ่ม URI/คำเตือน — ทดสอบสร้างจากคำตอบจริงผ่าน ไม่ error (หลักฐาน/หน่วยงาน/ขั้นตอน ไม่ render เพราะพึ่ง curated CSV+Graph ที่ยังไม่มี, ตั้งใจไม่ใส่ placeholder หลอก)
+- [X] `src/retrieval/router.py` โครง MoE (Pydantic `RouteDecision`) — rule-based classifier เท่านั้น (ไม่มี LLM classifier, ไม่ต่อ graph/engine ตามที่ PLAN §11 ระบุ D2=แค่เริ่ม) ทดสอบผ่าน 7 query
+- [X] `src/app/app_line.py` (ใหม่): RAGEngine + chat_history (Neo4j) + Flex card ต่อเข้า LINE webhook จริง — เปิด Docker Desktop → `docker compose up -d neo4j` (healthy) → รัน `app_line.py` → `cloudflared.exe tunnel` → ถามจริงผ่าน LINE app บนมือถือ **ผ่านจริง**: "ลูกจ้างคือใคร" และ "ฝ่าฝืนมาตรา 61 มีโทษอย่างไร" ตอบถูกทั้งคู่พร้อมอ้างอิงมาตรา, log ยืนยัน `POST /callback` 200 OK ทุกครั้ง, Neo4j บันทึกบทสนทนาจริง (เห็น MERGE ChatUser/CREATE ChatMessage ใน log), ไม่มี exception ทั้ง retrieval/generation/reply
+
+- **ส่งท้ายวัน**: ✅ ครบทุกข้อ — Dense RAG ตอบจริงบน LINE พร้อม Flex card ยืนยันด้วยการทดสอบจริงผ่าน LINE app (ไม่ใช่แค่จำลอง)
 
 ---
 
