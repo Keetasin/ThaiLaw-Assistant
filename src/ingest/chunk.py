@@ -3,8 +3,8 @@ import re
 import os
 
 if __name__ == "__main__":
-    from .day2_chunk import main as _day2_main
-    _day2_main()
+    from .chunk_core import main as _core_main
+    _core_main()
     raise SystemExit
 
 def create_chunks_and_metadata(input_file, output_file, law_id, law_name, source_url):
@@ -67,6 +67,6 @@ if __name__ == "__main__":
 
 # Canonical Day 2 implementation. Keeps existing import path stable.
 try:
-    from .day2_chunk import create_chunks, create_chunks_and_metadata, write_chunks
+    from .chunk_core import create_chunks, create_chunks_and_metadata, write_chunks
 except ImportError:
     pass

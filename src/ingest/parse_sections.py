@@ -3,8 +3,8 @@ import json
 import os
 
 if __name__ == "__main__":
-    from .day2_parse import main as _day2_main
-    _day2_main()
+    from .parse_core import main as _core_main
+    _core_main()
     raise SystemExit
 
 def parse_law_text(input_file, output_file):
@@ -84,6 +84,6 @@ if __name__ == "__main__":
 
 # Canonical Day 2 implementation. Keeps existing import path stable.
 try:
-    from .day2_parse import parse_lines, parse_law_text, normalize_digits
+    from .parse_core import parse_lines, parse_law_text, normalize_digits
 except ImportError:
     pass

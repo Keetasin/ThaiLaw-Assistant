@@ -1,15 +1,15 @@
 import csv, tempfile, unittest
 from pathlib import Path
 
-from src.ingest.day2_parse import parse_lines
-from src.ingest.day2_chunk import create_chunks
-from src.index.day2_graph import build_graph, cypher_statements
-from src.index.day2_triples import load_topics, validate_triples
+from src.ingest.parse_core import parse_lines
+from src.ingest.chunk_core import create_chunks
+from src.index.graph_core import build_graph, cypher_statements
+from src.index.triples import load_topics, validate_triples
 from src.ingest.parse_sections import parse_lines as canonical_parse_lines
 from src.ingest.chunk import create_chunks as canonical_create_chunks
 from src.index.build_graph import build_graph as canonical_build_graph
 
-class Day2Tests(unittest.TestCase):
+class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.sections = parse_lines(["หมวด 1 ทั่วไป", "มาตรา ๑ นายจ้างต้องจ่ายค่าจ้าง", "ตามมาตรา ๒", "มาตรา ๒ ค่าจ้างหมายความว่า เงิน", "มาตรา ๓ (ยกเลิก)"])
 
