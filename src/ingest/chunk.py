@@ -1,72 +1,55 @@
-import json
-import re
-import os
+"""Stable JSONL chunk builder for statutes."""
+from __future__ import annotations
+import argparse, json, re
+from collections import Counter
+from datetime import date
+from pathlib import Path
+
+REF_RE = re.compile(r"มาตรา\s*([๐-๙0-9]+(?:\s*/\s*[๐-๙0-9]+)?)")
+THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+
+def _tokens(text: str) -> int: return max(1, len(re.findall(r"\S+", text)))
+def _refs(text: str, current: str) -> list[str]:
+    refs = {x.translate(THAI_DIGITS).replace(" ", "") for x in REF_RE.findall(text)}; refs.discard(current)
+    return sorted(refs, key=lambda x: tuple(int(p) for p in x.split("/")))
+
+def create_chunks(sections: list[dict], law_id: str, law_name: str, source_url: str,
+                  retrieved_date: str | None = None, max_tokens: int = 800,
+                  doc_type: str = "statute") -> list[dict]:
+    result, retrieved, occurrences = [], retrieved_date or date.today().isoformat(), Counter()
+    for section in sections:
+        number, text = str(section["section_no"]).translate(THAI_DIGITS), section["text"].strip()
+        occurrences[number] += 1
+        paragraphs, pieces, current, size = section.get("paragraphs") or text.splitlines(), [], [], 0
+        if _tokens(text) <= max_tokens: pieces = [text]
+        else:
+            for paragraph in paragraphs:
+                if current and size + _tokens(paragraph) > max_tokens: pieces.append("\n".join(current)); current, size = [], 0
+                current.append(paragraph); size += _tokens(paragraph)
+            if current: pieces.append("\n".join(current))
+        for index, piece in enumerate(pieces or [text], 1):
+            version = "" if occurrences[number] == 1 else f"-v{occurrences[number]}"
+            result.append({"chunk_id": f"{law_id}-s{number}{version}-p{index}", "law_id": law_id,
+                "law_name": law_name, "chapter": section.get("chapter", "ไม่ระบุหมวด"),
+                "section_no": number, "paragraph": index, "doc_type": doc_type,
+                "status": section.get("status", "in_force"), "amended_by": section.get("amended_by", []),
+                "version": section.get("version"), "refs_out": _refs(piece, number),
+                "source_url": source_url, "retrieved_date": retrieved, "text": piece})
+    return result
+
+def write_chunks(chunks: list[dict], output_file: str | Path) -> None:
+    ids = [x["chunk_id"] for x in chunks]
+    if len(ids) != len(set(ids)): raise ValueError("duplicate chunk_id")
+    target = Path(output_file); target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in chunks), encoding="utf-8")
+
+def create_chunks_and_metadata(input_file: str, output_file: str, law_id: str, law_name: str, source_url: str) -> list[dict]:
+    sections = json.loads(Path(input_file).read_text(encoding="utf-8")); chunks = create_chunks(sections, law_id, law_name, source_url)
+    write_chunks(chunks, output_file); return chunks
+
+def main() -> None:
+    parser = argparse.ArgumentParser(); parser.add_argument("input_file"); parser.add_argument("output_file"); parser.add_argument("--law-id", required=True); parser.add_argument("--law-name", required=True); parser.add_argument("--source-url", required=True)
+    args = parser.parse_args(); print(f"wrote {len(create_chunks_and_metadata(args.input_file, args.output_file, args.law_id, args.law_name, args.source_url))} chunks")
 
 if __name__ == "__main__":
-    from .chunk_core import main as _core_main
-    _core_main()
-    raise SystemExit
-
-def create_chunks_and_metadata(input_file, output_file, law_id, law_name, source_url):
-    print(f"กำลังสร้าง Chunks และ Metadata จาก: {input_file}")
-    
-    if not os.path.exists(input_file):
-        print(f"❌ ไม่พบไฟล์ {input_file}")
-        return
-
-    with open(input_file, 'r', encoding='utf-8') as f:
-        parsed_sections = json.load(f)
-
-    chunks = []
-    
-    for sec in parsed_sections:
-        section_no = sec["section_no"]
-        text = sec["text"]
-        
-        # สกัดการอ้างอิงข้ามมาตรา
-        refs_out = re.findall(r'มาตรา\s*(\d+)', text)
-        refs_out = list(set([r for r in refs_out if r != section_no]))
-        
-        # สร้าง Schema ตาม PLAN.md 2.4
-        chunk = {
-            "chunk_id": f"{law_id}-s{section_no}",
-            "law_id": law_id,
-            "law_name": law_name,
-            "chapter": sec["chapter"],
-            "section_no": section_no,
-            "paragraph": 1, # โครงสร้างเบื้องต้นให้ทั้งมาตราเป็น 1 chunk
-            "doc_type": "statute",
-            "status": sec["status"],
-            "amended_by": [], 
-            "refs_out": refs_out,
-            "source_url": source_url,
-            "retrieved_date": "2026-09-25",
-            "text": text
-        }
-        chunks.append(chunk)
-
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for c in chunks:
-            f.write(json.dumps(c, ensure_ascii=False) + '\n')
-            
-    print(f"✅ สร้าง Chunks เสร็จสิ้น เตรียมพร้อมสำหรับ Vector/Graph")
-    print(f"💾 บันทึกไฟล์ JSONL ที่: {output_file}")
-
-if __name__ == "__main__":
-    input_json = "data/clean/parsed_LPA2541.json"
-    output_jsonl = "data/chunks.jsonl"
-    
-    create_chunks_and_metadata(
-        input_file=input_json,
-        output_file=output_jsonl,
-        law_id="LPA2541",
-        law_name="พระราชบัญญัติคุ้มครองแรงงาน พ.ศ. 2541",
-        source_url="https://www.ocs.go.th"
-    )
-
-# Canonical Day 2 implementation. Keeps existing import path stable.
-try:
-    from .chunk_core import create_chunks, create_chunks_and_metadata, write_chunks
-except ImportError:
-    pass
+    main()
