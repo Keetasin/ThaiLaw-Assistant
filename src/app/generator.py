@@ -34,8 +34,30 @@ def build_context(sections):
     return "\n".join(lines)
 
 
-def generate(sections, question, provider="local"):
-    context = build_context(sections)
+def parse_citation(answer, sections):
+    """Split the LLM's raw answer into (clean_answer, cited_sections).
+
+    A bare `\\[มาตรา\\s*(\\d+...)\\]` match anywhere would also catch the model
+    mentioning a section number mid-prose, so we require one strict trailer
+    line ("ใช้ข้อมูลจาก: [มาตรา X], ...") that is not part of the answer's
+    prose, parse only that, and strip it from what's shown to the user. If no
+    such trailer line is present (e.g. the "ไม่พบข้อมูล" refusal case), fall
+    back to scanning the whole answer for `[มาตรา X]` mentions. If neither
+    finds a citation, every retrieved section is treated as cited — better to
+    over-cite than to show an unsourced answer.
+    """
+    trailer = re.search(r"^ใช้ข้อมูลจาก:\s*((?:\[มาตรา\s*[0-9/]+\]\s*,?\s*)*)\s*$", answer, re.M)
+    if trailer:
+        cited_nos = set(re.findall(r"\[มาตรา\s*([0-9/]+)\]", trailer.group(1)))
+        clean_answer = answer[: trailer.start()].rstrip()
+    else:
+        cited_nos = set(re.findall(r"\[มาตรา\s*([0-9/]+)\]", answer))
+        clean_answer = answer
+    cited_sections = [s for s in sections if s["section_no"] in cited_nos] or sections
+    return clean_answer, cited_sections
+
+
+def _generate_from_context_text(context, sections_for_citation, question, provider="local"):
     prompt = f'{SYSTEM_PROMPT}\n\nข้อมูลอ้างอิง:\n{context}\n\nคำถาม: {question}'
 
     llm = get_llm(provider=provider)
@@ -45,17 +67,7 @@ def generate(sections, question, provider="local"):
     if "<think>" in answer:
         answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
 
-    # A bare `\[มาตรา\s*(\d+...)\]` match anywhere would also catch the model
-    # mentioning a section number mid-prose, so we require one strict trailer
-    # line ("ใช้ข้อมูลจาก: [มาตรา X], ...") that is not part of the answer's
-    # prose, parse only that, and strip it from what's shown to the user.
-    trailer = re.search(r"^ใช้ข้อมูลจาก:\s*((?:\[มาตรา\s*[0-9/]+\]\s*,?\s*)*)\s*$", answer, re.M)
-    if trailer:
-        cited_nos = set(re.findall(r"\[มาตรา\s*([0-9/]+)\]", trailer.group(1)))
-        answer = answer[: trailer.start()].rstrip()
-    else:
-        cited_nos = set(re.findall(r"\[มาตรา\s*([0-9/]+)\]", answer))
-    cited_sections = [s for s in sections if s["section_no"] in cited_nos] or sections
+    answer, cited_sections = parse_citation(answer, sections_for_citation)
 
     # No URL here — the Flex card (src/app/flex.py) already carries a
     # dedicated "อ่านตัวบทต้นฉบับ" button for that; repeating it as plain
@@ -65,3 +77,17 @@ def generate(sections, question, provider="local"):
         for s in cited_sections
     )
     return f"{answer}\n\nที่มา: พระราชบัญญัติคุ้มครองแรงงาน พ.ศ. 2541\n{citation}"
+
+
+def generate(sections, question, provider="local"):
+    return _generate_from_context_text(build_context(sections), sections, question, provider)
+
+
+def generate_from_cards(cards, sections, question, provider="local"):
+    """Hybrid mode: `cards` are pre-built, graph-enriched Section Cards
+    (src.retrieval.context.build_section_cards) used as the LLM context
+    verbatim instead of build_context()'s plain per-section formatting.
+    `sections` (the same section dicts the cards were built from) is still
+    needed for parse_citation()'s section_no matching in the citation
+    trailer."""
+    return _generate_from_context_text("\n\n".join(cards), sections, question, provider)

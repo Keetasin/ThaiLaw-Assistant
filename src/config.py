@@ -17,6 +17,8 @@ CHROMA_DIR = os.getenv("CHROMA_PERSIST_DIR", os.path.join(DATA_DIR, "chroma_db")
 BM25_PATH = os.path.join(DATA_DIR, "bm25.pkl")
 CHUNKS_PATH = os.path.join(DATA_DIR, "chunks.jsonl")
 SECTIONS_PATH = os.path.join(DATA_DIR, "sections.json")
+GRAPH_PATH = os.path.join(DATA_DIR, "graph.json")
+TOPICS_PATH = os.path.join(DATA_DIR, "curated", "topic_agency_evidence_form_step.csv")
 TRACE_PATH = os.path.join(DATA_DIR, "traces.jsonl")
 
 EMBED_MODEL = "BAAI/bge-m3"
@@ -49,6 +51,13 @@ FUSE_K = 6
 RERANK_K = 5
 RRF_C = 60
 EXPAND_BUDGET_CHARS = 7000
+# Hybrid mode's Section Cards (src/retrieval/context.py) carry more per-section
+# text (graph-derived penalty/definition/agency/evidence/form/step lines on
+# top of the raw body) than dense-mode's plain expand(), so its budget is
+# split per PLAN.md §5 point 4's "Local 3k / API 6k" *token* target — same
+# char-count-as-token-proxy approximation EXPAND_BUDGET_CHARS above already
+# uses (Thai has no whitespace-delimited tokens), roughly doubled to match.
+CONTEXT_BUDGET_CHARS = {"local": 6000, "api": 12000}
 TAU_ANSWER = 0.093
 TAU_REJECT = 0.05
 
