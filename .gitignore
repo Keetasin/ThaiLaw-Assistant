@@ -18,8 +18,14 @@ credentials.json
 data/raw/
 data/clean/
 data/chunks.jsonl
+data/sections.json
+data/bm25.pkl
+data/traces.jsonl
 !data/curated/
 eval/results/
+
+# --- Model caches (bge-m3, bge-reranker-v2-m3 — several GB) ---
+.hf_cache/
 
 # --- Vector / Graph store dumps ---
 chroma_db/
