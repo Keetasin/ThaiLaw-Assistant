@@ -2,7 +2,7 @@ import csv, tempfile, unittest
 from pathlib import Path
 
 from src.ingest.parse_core import parse_lines
-from src.ingest.chunk_core import create_chunks
+from src.ingest.chunk import create_chunks
 from src.index.graph_core import build_graph, cypher_statements
 from src.index.triples import load_topics, validate_triples
 from src.ingest.parse_sections import parse_lines as canonical_parse_lines
