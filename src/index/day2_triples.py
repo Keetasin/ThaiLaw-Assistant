@@ -23,10 +23,16 @@ def validate_triples(items: object, topics: set[str]) -> list[dict]:
     valid = []
     for item in items:
         if not isinstance(item, dict): continue
-        if item.get("subject_type") not in ALLOWED or item.get("object_type") not in ALLOWED: continue
-        if item.get("relation") not in RELATIONS or not item.get("subject") or not item.get("object"): continue
-        if item["object_type"] == "Topic" and item["object"] not in topics: continue
-        valid.append({"subject": str(item["subject"]), "subject_type": item["subject_type"], "relation": item["relation"], "object": str(item["object"]), "object_type": item["object_type"], "source": "llm"})
+        relation = item.get("relation")
+        inferred = {"GRANTS_RIGHT": ("Actor", "Right"), "IMPOSES_DUTY": ("Actor", "Duty"), "HAS_PENALTY": ("Actor", "Penalty"), "ABOUT": ("Actor", "Topic"), "HELD_BY": ("Right", "Actor"), "BINDS": ("Duty", "Actor")}
+        subject_type, object_type = item.get("subject_type"), item.get("object_type")
+        if relation in inferred:
+            default_subject, default_object = inferred[relation]
+            subject_type, object_type = subject_type or default_subject, object_type or default_object
+        if subject_type not in ALLOWED or object_type not in ALLOWED: continue
+        if relation not in RELATIONS or not item.get("subject") or not item.get("object"): continue
+        if object_type == "Topic" and item["object"] not in topics: continue
+        valid.append({"subject": str(item["subject"]), "subject_type": subject_type, "relation": relation, "object": str(item["object"]), "object_type": object_type, "source": "llm"})
     return valid
 
 def _parse_response(response):
