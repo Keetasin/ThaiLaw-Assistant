@@ -65,6 +65,7 @@ class DotBlueClient:
         stream = self._client.chat.completions.create(
             model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens,
             stream=True, stream_options={"include_usage": True},
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         text, usage = "", None
         for chunk in stream:
