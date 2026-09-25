@@ -22,7 +22,7 @@ def log_trace(*, session, q, q_used, zone, rerank_score, hits, latency, answer, 
         "rerank_score": rerank_score,
         "provider": provider,
         "hits": [
-            {"id": h.get("chunk_id", h.get("id")), "section_no": h.get("section_no"), "heading": h.get("heading")}
+            {"id": h.get("chunk_id", h.get("id")), "section_no": h.get("section_no"), "chapter": h.get("chapter")}
             for h in hits
         ],
         "latency": latency,

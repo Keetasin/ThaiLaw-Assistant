@@ -3,9 +3,6 @@
 bge-reranker-v2-m3 must give 0-1 scores (sigmoid), not raw logits, or every
 TAU_* threshold in config.py is meaningless (copied from
 aj-krit/Project2/core/reranker.py — see check_score_range()).
-
-STAGED FOR DAY 2: not wired into anything yet, requires bge-reranker-v2-m3
-downloaded (Day 2 ingest/index step).
 """
 import numpy as np
 from sentence_transformers import CrossEncoder
@@ -22,18 +19,23 @@ def _get_model():
     return _model
 
 
-def _passage(c):
-    # Must match whatever build_vector.py's embed_text() produces — a
-    # wrong-topic chunk can outscore the right one if the reranker only
-    # sees raw body text without its heading/section label for context.
-    return f'{c["heading"]} — {c["section"]}\n{c["text"]}'
+def passage_text(c):
+    # Public so build_vector.py's embed text uses this exact same shape —
+    # a wrong-topic chunk can outscore the right one if the reranker only
+    # sees raw body text without its chapter/section label for context, and
+    # a format that drifts between embed-time and rerank-time silently hurts
+    # both without ever raising an error.
+    # c["chapter"] is None for sections before หมวด 1 starts (บททั่วไป-ish
+    # definitions/scope sections 1-6) — omit the label rather than print "None".
+    label = f'{c["chapter"]} — มาตรา {c["section_no"]}' if c["chapter"] else f'มาตรา {c["section_no"]}'
+    return f'{label}\n{c["text"]}'
 
 
 def rerank(query, candidates, k=config.RERANK_K):
     if not candidates:
         return [], 0.0
     ce = _get_model()
-    pairs = [(query, _passage(c)) for c in candidates]
+    pairs = [(query, passage_text(c)) for c in candidates]
     scores = ce.predict(pairs)
     order = np.argsort(-scores)[:k]
     hits = [candidates[i] for i in order]
