@@ -1,5 +1,14 @@
 # ตั้งค่า Environment และตัวแปรระบบ
 import os
+from pathlib import Path
+
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _key, _value = _line.split("=", 1)
+            os.environ.setdefault(_key.strip(), _value.strip().strip('"').strip("'"))
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
