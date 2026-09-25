@@ -10,5 +10,6 @@ data/graph-cli.json
 data/clean/day2_parsed.json
 data/clean/parsed_LPA2541.json
 data/triples.jsonl
+data/curated/triples_review.csv
 data/index/
 eval/results/
