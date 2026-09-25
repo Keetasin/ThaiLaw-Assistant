@@ -1,51 +1,15 @@
-# --- Python ---
-__pycache__/
-*.pyc
-*.pyo
+.env
 .venv/
 venv/
-env/
-*.egg-info/
-build/
-dist/
-
-# --- Secrets ---
-.env
-*.env.local
-credentials.json
-
-# --- Data (large / generated, keep curated CSVs and gold test set) ---
-data/raw/
-data/clean/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 data/chunks.jsonl
-!data/curated/
+data/graph.json
+data/graph-cli.json
+data/clean/parsed_output.json
+data/clean/parsed_LPA2541.json
+data/triples.jsonl
+data/curated/triples_review.csv
+data/index/
 eval/results/
-
-# --- Vector / Graph store dumps ---
-chroma_db/
-*.sqlite3
-neo4j_data/
-neo4j/data/
-neo4j/logs/
-
-# --- Ollama / model caches ---
-.ollama/
-models/*.gguf
-
-# --- Logs / traces ---
-*.log
-logs/
-*.jsonl.log
-
-# --- OS / editor ---
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# --- Tunnel binary: download fresh instead of committing (54MB) ---
-cloudflared.exe
-.cloudflared/
-
-# --- Jupyter ---
-.ipynb_checkpoints/

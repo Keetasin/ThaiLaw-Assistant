@@ -65,6 +65,7 @@ class DotBlueClient:
         stream = self._client.chat.completions.create(
             model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens,
             stream=True, stream_options={"include_usage": True},
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         text, usage = "", None
         for chunk in stream:
@@ -92,3 +93,16 @@ def get_llm(provider="local", model=None):
     if provider == "api":
         return DotBlueClient(model=model)
     raise ValueError(f"unknown provider: {provider!r} (expected 'local' or 'api')")
+
+
+class LLMClient:
+    """Small JSON-capable adapter used by graph extraction."""
+    def __init__(self, provider="ollama", model=None, timeout=30):
+        self.provider = provider
+        self.model = model or (config.OLLAMA_MODEL if provider == "ollama" else config.DOTBLUE_MODEL)
+        self.timeout = timeout
+
+    def __call__(self, prompt):
+        client = get_llm("local" if self.provider == "ollama" else "api", model=self.model)
+        text, _usage = client.chat([{"role": "user", "content": prompt}], num_predict=1200)
+        return text

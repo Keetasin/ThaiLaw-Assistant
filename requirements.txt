@@ -1,47 +1,13 @@
-# --- Web / LINE ---
-flask==3.0.3
-line-bot-sdk==3.11.0
-python-dotenv==1.0.1
-requests==2.32.3
-
-# --- LLM clients (OpenAI-compatible: dotBlue + Ollama) ---
-openai==1.51.0
-tenacity==8.5.0
-tiktoken==0.8.0
-
-# --- Vector / Dense retrieval ---
-chromadb==0.5.15
-sentence-transformers==3.1.1
-FlagEmbedding==1.2.11
-
-# --- Lexical retrieval ---
-rank-bm25==0.2.2
-pythainlp==5.0.4
-
-# --- Graph DB ---
-neo4j==5.24.0
-
-# --- Data ingest ---
-pymupdf==1.24.11
-beautifulsoup4==4.12.3
-lxml==5.3.0
-
-# --- Schema / validation ---
-pydantic==2.9.2
-
-# --- Eval / analysis ---
-pandas==2.2.3
-numpy==1.26.4
-scikit-learn==1.5.2
-bert-score==0.3.13
-matplotlib==3.9.2
-tqdm==4.66.5
-
-# --- System / resource monitoring ---
-psutil==6.0.0
-
-# NOTE (GPU): torch is pulled in transitively by sentence-transformers/FlagEmbedding
-# as CPU-only by default on Windows. For GPU (RTX 3050) reinstall matching CUDA build AFTER
-# `pip install -r requirements.txt`, e.g.:
-#   pip install torch --index-url https://download.pytorch.org/whl/cu121
-# Verify with: python -c "import torch; print(torch.cuda.is_available())"
+Flask
+line-bot-sdk==3.21.0
+neo4j
+pdfplumber
+pythainlp
+pydantic
+chromadb
+sentence-transformers
+tiktoken
+openai
+ollama
+tenacity
+rank_bm25

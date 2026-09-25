@@ -12,7 +12,7 @@
 | Domain | **กฎหมายแรงงาน** (พ.ร.บ.คุ้มครองแรงงาน + ประกันสังคม + เงินทดแทน) + คู่มือ/FAQ ของหน่วยงานรัฐ | ตรง MVP ในหัวข้อ, ทำ 5 วันทัน, มีโครงสร้างอ้างอิงข้ามมาตราเยอะ ซึ่งเหมาะกับ Graph |
 | Vector DB | **ChromaDB** (persistent, embedded) | ผล Lab FAISS-vs-Chroma: ranking เท่ากัน แต่ Chroma ใช้ `where` filter แล้วตรงรหัส 4/4 ขณะที่ FAISS ตรง 2/4 จึงใช้ filter ตาม `law_id`/`status` ได้ |
 | Lexical | **BM25 2 ขา**: word (PyThaiNLP `newmm`) + **char 3-gram** (รองรับพิมพ์ผิด) | reuse จาก Project2; query แบบ "มาตรา 61" หรือศัพท์เฉพาะ dense มักพลาด |
-| Graph DB | **Neo4j 5** (Docker) + APOC | ตรงกับที่ทำมาทุกแลบ (`Graph-RAG/`, `Hybrid-Graph-RAG-Chatbot/`) ใช้แบบเดียวกันหมด — ต้องเปิดแอป **Docker Desktop ให้ทำงานอยู่ก่อน** (แค่ติดตั้งไว้ไม่พอ ต้องเปิดแอปให้ daemon รันด้วย) แล้ว `docker compose up -d neo4j` ถึงจะต่อได้ |
+| Graph DB | **Neo4j 5** (Docker) + APOC | ใช้ Cypher และทำ multi-hop ได้ |
 | Embedding | **BAAI/bge-m3** (568M) | รองรับภาษาไทยดี, context ยาว 8192 |
 | Reranker | **BAAI/bge-reranker-v2-m3** | cross-encoder หลายภาษา ใช้ทำ context selection |
 | Local LLM | Ollama: **qwen3.5:4b** (มีในเครื่องแล้ว), **gemma3:4b** (มีแล้ว), + **Typhoon2.1-gemma3-4b** (ปรับจูนภาษาไทย) | RTX 3050 **6GB** รุ่น 4B Q4 ได้ประมาณ 3–3.5GB พอรันบน GPU ได้เต็มตัว ส่วนรุ่น 7–8B จะล้นไป CPU และช้ามาก |
@@ -33,8 +33,8 @@
 | Per-stage latency JSONL | `Project2/core/tracing.py` | ใช้ได้เลย |
 | LINE v3 + Flex + thread + `OLLAMA_LOCK` | `Project2/app_line.py` | เพิ่มคำสั่ง `/mode` `/llm` `/debug` |
 | Eval R@k/MRR/threshold sweep, BERTScore/SBERT/Faithfulness, tok/s, full-context baseline | `Project2/eval/*.py` | ใช้ test set ใหม่ |
-| Neo4j chat memory | `RAG/Hybrid-Graph-RAG-Chatbot/chat_history.py` | เปลี่ยนแค่ env var เป็น `NEO4J_USER` (จากเดิม `NEO4J_USERNAME`) ให้ตรง `.env.example` |
-| Neo4j docker (5.24 + APOC + healthcheck) | `RAG/Hybrid-Graph-RAG-Chatbot/docker-compose.yml` | ใช้ได้เลย — ใช้ได้จริงหลังเปิดแอป Docker Desktop |
+| Neo4j chat memory | `RAG/Hybrid-Graph-RAG-Chatbot/chat_history.py` | ใช้ได้เลย |
+| Neo4j docker (5.24 + APOC + healthcheck) | `RAG/Hybrid-Graph-RAG-Chatbot/docker-compose.yml` | ใช้ได้เลย |
 | LLM extraction + ontology validation | `Hybrid-Graph-RAG-Chatbot/pdf2neo4j/build_kg.py`, `Graph-RAG/handbook-knowledge-graph/` | เปลี่ยน ontology เป็น schema กฎหมาย (4.2) |
 | Regex NER กฎหมาย | `NER/thai_legal_ner_pattern.py` | ปรับให้สกัด มาตรา / หน่วยงาน / ลูกจ้าง-นายจ้าง |
 | Router | `RAG/rag-router-mixture-of-experts/MoE-2/rag_moe_pipeline.py` | route เป็น dense/graph/hybrid/direct_llm |
@@ -282,7 +282,7 @@ Relationships:
 - **Logging**: ทุก request ลง JSONL (`tracing.py`) (query, route, retrieved ids, latency ต่อ stage, tokens, model, error) ใช้เป็นข้อมูล latency analysis ในรายงาน
 - **Error handling**: Neo4j ล่มให้ degrade เป็น dense-only พร้อมแจ้งใน debug, LLM ล่มให้ใช้ fallback, input ยาว/ว่าง/สติกเกอร์ให้ตอบ guide
 - **Guardrails**: ไม่อ้างว่าเป็นทนาย, ไม่มี context ให้ปฏิเสธ + แนะนำหน่วยงาน, กรณีซับซ้อน (คดีความ, จำนวนเงินสูง) ให้แนะนำปรึกษาทนาย/หน่วยงานรัฐ
-- **Deploy**: `docker compose up -d neo4j` (ต้องเปิดแอป Docker Desktop ให้ daemon รันอยู่ก่อนเสมอ) + รัน Flask app local + เปิด HTTPS webhook ด้วย `cloudflared.exe tunnel --url http://localhost:5000` (binary มีอยู่แล้วที่ `Final-Project/cloudflared.exe`)
+- **Deploy**: `docker compose` (neo4j + app), เปิด HTTPS webhook ด้วย `cloudflared.exe tunnel --url http://localhost:5000` (binary มีอยู่แล้วที่ `Final-Project/cloudflared.exe`)
 
 ---
 
@@ -394,7 +394,6 @@ Final-Project/
 | VRAM ไม่พอ | embed/rerank บน CPU ตอน query |
 | LINE/tunnel ล่มวันนำเสนอ | demo video + CLI mode สำรอง |
 | กฎหมายแก้ไข/ข้อมูลผิด | เก็บ status/amended_by/retrieved_date และแสดงใน footer ทุกคำตอบ |
-| Docker Desktop ไม่ได้เปิด (daemon ไม่รัน) | เปิดแอป Docker Desktop ทิ้งไว้ตลอดช่วงพัฒนา/เดโม ตรวจด้วย `docker info` ก่อนรัน `docker compose up` ทุกครั้ง |
 
 ## 14. ความปลอดภัย
 - เก็บ `DOTBLUE_API_KEY`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `NEO4J_PASSWORD` ใน `.env` เท่านั้น และใส่ `.gitignore` ห้าม commit
