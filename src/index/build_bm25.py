@@ -1,41 +1,29 @@
-"""Build the two-legged BM25 index (word + char 3-gram) from data/chunks.jsonl
-into the single pickle that src/retrieval/retriever.py already expects at
-config.BM25_PATH: {"word": BM25Okapi, "gram": BM25Okapi, "ids": [chunk_id,...]}
-where `ids` is a shared parallel array indexing both BM25 objects' doc order.
-
-Indexes passage_text(c) (chapter + "มาตรา N" label + body), not raw
-chunk["text"] alone — a section's own body almost never restates its own
-number (e.g. มาตรา 61's text never contains "61" or "มาตรา"), so a literal
-"มาตรา 61" lookup query — exactly the case PLAN.md §0 calls out BM25 for
-("query แบบ 'มาตรา 61' ... dense มักพลาด") — would otherwise never match it.
-"""
-import json
-import pickle
-
+"""Build word and character 3-gram BM25 indexes."""
+from __future__ import annotations
+import argparse, json, pickle
+from pathlib import Path
 from rank_bm25 import BM25Okapi
-
 from src import config
 from src.retrieval.reranker import passage_text
 from src.retrieval.thai import tok_gram, tok_word
 
+def load_chunks(path: str | Path = config.CHUNKS_PATH) -> list[dict]:
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
-def build_bm25_index():
-    with open(config.CHUNKS_PATH, encoding="utf-8") as f:
-        chunks = [json.loads(line) for line in f]
+def build(chunks: list[dict], output: str | Path = config.BM25_PATH) -> Path:
+    ids = [chunk["chunk_id"] for chunk in chunks]; texts = [passage_text(chunk) for chunk in chunks]
+    payload = {"word": BM25Okapi([tok_word(text) for text in texts]), "gram": BM25Okapi([tok_gram(text) for text in texts]), "ids": ids}
+    target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as stream: pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
+    return target
 
-    ids = [c["chunk_id"] for c in chunks]
-    texts = [passage_text(c) for c in chunks]
-    word_corpus = [tok_word(t) for t in texts]
-    gram_corpus = [tok_gram(t) for t in texts]
+def main() -> None:
+    parser = argparse.ArgumentParser(); parser.add_argument("--chunks", default=config.CHUNKS_PATH); parser.add_argument("--output", default=config.BM25_PATH); args = parser.parse_args()
+    print(f"wrote BM25 index: {build(load_chunks(args.chunks), args.output)}")
 
-    bm25_word = BM25Okapi(word_corpus)
-    bm25_gram = BM25Okapi(gram_corpus)
-
-    with open(config.BM25_PATH, "wb") as f:
-        pickle.dump({"word": bm25_word, "gram": bm25_gram, "ids": ids}, f)
-
-    print(f"built BM25 index for {len(chunks)} chunks -> {config.BM25_PATH}")
+if __name__ == "__main__": main()
 
 
-if __name__ == "__main__":
-    build_bm25_index()
+def build_bm25_index() -> Path:
+    """Origin/main-compatible entry point using configured paths."""
+    return build(load_chunks(), config.BM25_PATH)

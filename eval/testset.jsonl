@@ -1,3 +1,4 @@
+
 {"id":"A-001","question":"มาตรา 1 ว่าด้วยเรื่องอะไร","category":"lookup","gold_sections":["LPA2541-s1-p1"],"key_points":["ชื่อกฎหมายและขอบเขตเบื้องต้น"],"gold_agency":"กรมสวัสดิการและคุ้มครองแรงงาน","expected_query_type":"lookup"}
 {"id":"A-002","question":"มาตรา 5 นิยามคำว่าค่าจ้างว่าอย่างไร","category":"lookup","gold_sections":["LPA2541-s5-p1"],"key_points":["ความหมายของค่าจ้าง"],"gold_agency":"กรมสวัสดิการและคุ้มครองแรงงาน","expected_query_type":"lookup"}
 {"id":"A-003","question":"มาตรา 61 กำหนดเรื่องใด","category":"lookup","gold_sections":["LPA2541-s61-p1"],"key_points":["หลักการจ่ายค่าจ้าง"],"gold_agency":"กรมสวัสดิการและคุ้มครองแรงงาน","expected_query_type":"lookup"}

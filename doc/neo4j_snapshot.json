@@ -1,0 +1,9 @@
+{
+  "checked_at": "2026-09-26",
+  "endpoint": "http://localhost:7474/db/neo4j/tx/commit",
+  "mode": "read_only",
+  "node_counts": {"Law": 1, "Chapter": 22, "Section": 188},
+  "relationship_counts": {"HAS_CHAPTER": 22, "HAS_SECTION": 203, "PENALIZED_BY": 83, "REFERS_TO": 197},
+  "total_nodes": 211,
+  "total_relationships": 505
+}

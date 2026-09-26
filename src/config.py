@@ -1,69 +1,51 @@
-"""Central config. Retrieval constants below are Project2's tuned starting
-values (see doc/PLAN.md §0.1) — this is a different corpus (Thai labor law,
-not a student handbook), so TAU_ANSWER/TAU_REJECT/RRF weights must be
-re-measured in Day 4 eval, not trusted as-is.
-"""
+# ตั้งค่า Environment และตัวแปรระบบ
 import os
+from pathlib import Path
 
-from dotenv import load_dotenv
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _key, _value = _line.split("=", 1)
+            os.environ.setdefault(_key.strip(), _value.strip().strip('"').strip("'"))
 
-load_dotenv()
-
-HERE = os.path.dirname(__file__)
-ROOT = os.path.join(HERE, "..")
-DATA_DIR = os.path.join(ROOT, "data")
-
-CHROMA_DIR = os.getenv("CHROMA_PERSIST_DIR", os.path.join(DATA_DIR, "chroma_db"))
-BM25_PATH = os.path.join(DATA_DIR, "bm25.pkl")
-CHUNKS_PATH = os.path.join(DATA_DIR, "chunks.jsonl")
-SECTIONS_PATH = os.path.join(DATA_DIR, "sections.json")
-GRAPH_PATH = os.path.join(DATA_DIR, "graph.json")
-TOPICS_PATH = os.path.join(DATA_DIR, "curated", "topic_agency_evidence_form_step.csv")
-TRACE_PATH = os.path.join(DATA_DIR, "traces.jsonl")
-
-EMBED_MODEL = "BAAI/bge-m3"
-RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
-
-# All HF models should live under a local cache once downloaded (Day 2) —
-# same rationale as Project2/core/config.py: avoids drifting cache paths
-# between scripts and skips redundant online lookups after first download.
-os.environ.setdefault("HF_HOME", os.path.join(ROOT, ".hf_cache"))
-os.environ.setdefault("HF_HUB_OFFLINE", "0")  # flip to "1" once models are cached locally
-
-# --- LLM providers ---
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
-
 DOTBLUE_BASE_URL = os.getenv("DOTBLUE_BASE_URL", "https://ai.psu.blue/v1")
 DOTBLUE_API_KEY = os.getenv("DOTBLUE_API_KEY", "")
 DOTBLUE_MODEL = os.getenv("DOTBLUE_MODEL", "qwen/qwen3.6-flash")
 DOTBLUE_JUDGE_MODEL = os.getenv("DOTBLUE_JUDGE_MODEL", "qwen/qwen3.6-plus")
-DOTBLUE_FREE_MODEL = "PSU-LLM/psu-gemma"  # free tier (multiplier "ฟรี"), safe for smoke tests
-
-# --- Neo4j ---
+DOTBLUE_FREE_MODEL = "PSU-LLM/psu-gemma"
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
+NUM_PREDICT = int(os.getenv("NUM_PREDICT", "512"))
+NUM_CTX = int(os.getenv("NUM_CTX", "8192"))
+APP_PORT = int(os.getenv("APP_PORT", "5000"))
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "changeme")
-
-# --- Retrieval (Project2 starting values — retune Day 4, see doc/PLAN.md §3) ---
-POOL = 10
-FUSE_K = 6
-RERANK_K = 5
-RRF_C = 60
-EXPAND_BUDGET_CHARS = 7000
-# Hybrid mode's Section Cards (src/retrieval/context.py) carry more per-section
-# text (graph-derived penalty/definition/agency/evidence/form/step lines on
-# top of the raw body) than dense-mode's plain expand(), so its budget is
-# split per PLAN.md §5 point 4's "Local 3k / API 6k" *token* target — same
-# char-count-as-token-proxy approximation EXPAND_BUDGET_CHARS above already
-# uses (Thai has no whitespace-delimited tokens), roughly doubled to match.
-CONTEXT_BUDGET_CHARS = {"local": 6000, "api": 12000}
-TAU_ANSWER = 0.093
-TAU_REJECT = 0.05
-
-# --- Generation ---
-NUM_CTX = 8192
-NUM_PREDICT = 512
-TEMPERATURE = 0.2
-
-APP_PORT = int(os.getenv("APP_PORT", "5000"))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+os.environ.setdefault("HF_HOME", str(ROOT_DIR / ".hf_cache"))
+os.environ.setdefault("HF_HUB_OFFLINE", "0")
+CHUNKS_PATH = os.getenv("CHUNKS_PATH", str(ROOT_DIR / "data" / "chunks.jsonl"))
+CHROMA_DIR = os.getenv("CHROMA_DIR", os.getenv("CHROMA_PERSIST_DIR", str(ROOT_DIR / "data" / "index" / "chroma")))
+BM25_PATH = os.getenv("BM25_PATH", str(ROOT_DIR / "data" / "index" / "bm25.pkl"))
+SECTIONS_PATH = os.getenv("SECTIONS_PATH", str(ROOT_DIR / "data" / "sections.json"))
+GRAPH_PATH = os.getenv("GRAPH_PATH", str(ROOT_DIR / "data" / "graph.json"))
+TOPICS_PATH = os.getenv("TOPICS_PATH", str(ROOT_DIR / "data" / "curated" / "topic_agency_evidence_form_step.csv"))
+TRACE_PATH = os.getenv("TRACE_PATH", str(ROOT_DIR / "data" / "traces.jsonl"))
+EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+POOL = int(os.getenv("RETRIEVAL_POOL", "10"))
+RERANK_K = int(os.getenv("RERANK_K", "5"))
+FUSE_K = int(os.getenv("FUSE_K", "6"))
+RRF_C = int(os.getenv("RRF_C", "60"))
+EXPAND_BUDGET_CHARS = int(os.getenv("EXPAND_BUDGET_CHARS", "7000"))
+CONTEXT_BUDGET_CHARS = {
+    "local": int(os.getenv("CONTEXT_BUDGET_LOCAL", "6000")),
+    "api": int(os.getenv("CONTEXT_BUDGET_API", "12000")),
+}
+TAU_ANSWER = float(os.getenv("TAU_ANSWER", "0.093"))
+TAU_REJECT = float(os.getenv("TAU_REJECT", "0.05"))
+EMBED_DEVICE = os.getenv("EMBED_DEVICE", "cuda")
+RERANK_DEVICE = os.getenv("RERANK_DEVICE", "cpu")

@@ -3,8 +3,12 @@
 bge-reranker-v2-m3 must give 0-1 scores (sigmoid), not raw logits, or every
 TAU_* threshold in config.py is meaningless (copied from
 aj-krit/Project2/core/reranker.py — see check_score_range()).
+
+STAGED FOR DAY 2: not wired into anything yet, requires bge-reranker-v2-m3
+downloaded (Day 2 ingest/index step).
 """
 import numpy as np
+import torch
 from sentence_transformers import CrossEncoder
 
 from src import config
@@ -15,20 +19,19 @@ _model = None
 def _get_model():
     global _model
     if _model is None:
-        _model = CrossEncoder(config.RERANK_MODEL, device="cpu", max_length=512)
+        requested = str(config.RERANK_DEVICE).lower()
+        device = requested if requested == "cpu" or torch.cuda.is_available() else "cpu"
+        _model = CrossEncoder(config.RERANK_MODEL, device=device, max_length=512)
     return _model
 
 
 def passage_text(c):
-    # Public so build_vector.py's embed text uses this exact same shape —
-    # a wrong-topic chunk can outscore the right one if the reranker only
-    # sees raw body text without its chapter/section label for context, and
-    # a format that drifts between embed-time and rerank-time silently hurts
-    # both without ever raising an error.
-    # c["chapter"] is None for sections before หมวด 1 starts (บททั่วไป-ish
-    # definitions/scope sections 1-6) — omit the label rather than print "None".
-    label = f'{c["chapter"]} — มาตรา {c["section_no"]}' if c["chapter"] else f'มาตรา {c["section_no"]}'
-    return f'{label}\n{c["text"]}'
+    """Canonical chapter/section/body representation for all indexes."""
+    chapter = c.get("chapter") or c.get("heading") or c.get("law_name") or ""
+    section = c.get("section_no") or c.get("section") or ""
+    body = c.get("text") or ""
+    label = f"{chapter} — มาตรา {section}" if chapter else (f"มาตรา {section}" if section else "")
+    return f"{label}\n{body}" if label else body
 
 
 def rerank(query, candidates, k=config.RERANK_K):
