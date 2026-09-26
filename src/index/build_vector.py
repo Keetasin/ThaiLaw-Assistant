@@ -6,9 +6,8 @@ import chromadb
 import torch
 from sentence_transformers import SentenceTransformer
 from src import config
+from src.retrieval.reranker import passage_text
 
-def embed_text(chunk: dict) -> str:
-    return f"{chunk.get('law_name', '')} > {chunk.get('chapter', '')} > มาตรา {chunk.get('section_no', '')}\n{chunk.get('text', '')}"
 
 def load_chunks(path: str | Path = config.CHUNKS_PATH) -> list[dict]:
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -17,12 +16,15 @@ def build(chunks: list[dict], model_name: str = config.EMBED_MODEL, db_path: str
     device = config.EMBED_DEVICE if config.EMBED_DEVICE == "cpu" or torch.cuda.is_available() else "cpu"
     model = SentenceTransformer(model_name, device=device)
     client = chromadb.PersistentClient(path=db_path)
-    collection = client.get_or_create_collection(name="law", metadata={"hnsw:space": "cosine"})
-    ids = [chunk["chunk_id"] for chunk in chunks]
-    if ids: collection.delete(ids=ids)
+    try:
+        client.delete_collection("law")
+    except Exception:
+        pass
+    collection = client.create_collection(name="law", metadata={"hnsw:space": "cosine"})
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start:start + batch_size]
-        collection.add(ids=[x["chunk_id"] for x in batch], embeddings=model.encode([embed_text(x) for x in batch], normalize_embeddings=True).tolist(), documents=[embed_text(x) for x in batch], metadatas=[{"law_id": x.get("law_id", ""), "section_no": str(x.get("section_no", "")), "status": x.get("status", ""), "source_url": x.get("source_url", "")} for x in batch])
+        texts = [passage_text(x) for x in batch]
+        collection.add(ids=[x["chunk_id"] for x in batch], embeddings=model.encode(texts, normalize_embeddings=True).tolist(), documents=texts, metadatas=[{"law_id": x.get("law_id", ""), "section_no": str(x.get("section_no", "")), "status": x.get("status", ""), "source_url": x.get("source_url", "")} for x in batch])
     return collection.count()
 
 def main() -> None:

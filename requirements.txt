@@ -1,7 +1,11 @@
 Flask
 line-bot-sdk==3.21.0
 neo4j
+python-dotenv
 pdfplumber
+requests
+beautifulsoup4
+lxml
 pythainlp
 pydantic
 chromadb

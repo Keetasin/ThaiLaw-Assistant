@@ -62,7 +62,12 @@ class Retriever:
         order = np.argsort(-scores)[:n]
         return [self.bm25_ids[i] for i in order if scores[i] > 0]
 
-    def search(self, query, pool=config.POOL, fuse_k=config.FUSE_K):
+    def search_raw(self, query, pool=config.POOL):
+        """Return the three raw ranked chunk_id lists (dense, bm25-word,
+        bm25-gram) without fusing them, plus the top dense cosine score.
+        `search()` below is the fixed-weight (2.0/1.0/1.0) dense-only-mode
+        path; `src/retrieval/fusion.py` calls this directly to do its own
+        router-weighted RRF across dense/bm25/graph (PLAN.md §5 point 2)."""
         qv = self.emb.encode([query], normalize_embeddings=True)
         dense = self.col.query(query_embeddings=qv.tolist(), n_results=pool)
         dense_ids = dense["ids"][0]
@@ -70,7 +75,10 @@ class Retriever:
 
         word_ids = self._top_bm25(self.bm25_word, tok_word(query), pool)
         gram_ids = self._top_bm25(self.bm25_gram, tok_gram(query), pool)
+        return dense_ids, word_ids, gram_ids, top_cosine
 
+    def search(self, query, pool=config.POOL, fuse_k=config.FUSE_K):
+        dense_ids, word_ids, gram_ids, top_cosine = self.search_raw(query, pool)
         fused = rrf([(dense_ids, 2.0), (word_ids, 1.0), (gram_ids, 1.0)], k=fuse_k)
         hits = [self.chunks[cid] for cid, _ in fused if cid in self.chunks]
         return hits, top_cosine
