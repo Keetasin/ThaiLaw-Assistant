@@ -1,8 +1,6 @@
 """Day 1 check: confirm both LLM backends are reachable and Thai-capable.
 
-Uses the free dotBlue model (PSU-gemma) for the API leg so this doesn't
-burn paid credit — see scripts/measure_dotblue_credit.py for the actual
-per-call credit measurement against the paid model.
+
 
 Run: python -m scripts.smoke_llm
 """
@@ -25,4 +23,4 @@ def _run(label, provider, model=None):
 
 if __name__ == "__main__":
     _run("Ollama (local)", "local", model=config.OLLAMA_MODEL)
-    _run("dotBlue (free model, no credit)", "api", model=config.DOTBLUE_FREE_MODEL)
+    _run("dotBlue API", "api", model=config.DOTBLUE_MODEL)
