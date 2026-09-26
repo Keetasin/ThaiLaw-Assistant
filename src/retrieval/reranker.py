@@ -8,6 +8,7 @@ STAGED FOR DAY 2: not wired into anything yet, requires bge-reranker-v2-m3
 downloaded (Day 2 ingest/index step).
 """
 import numpy as np
+import torch
 from sentence_transformers import CrossEncoder
 
 from src import config
@@ -18,7 +19,8 @@ _model = None
 def _get_model():
     global _model
     if _model is None:
-        _model = CrossEncoder(config.RERANK_MODEL, device="cpu", max_length=512)
+        device = config.RERANK_DEVICE if config.RERANK_DEVICE == "cpu" or torch.cuda.is_available() else "cpu"
+        _model = CrossEncoder(config.RERANK_MODEL, device=device, max_length=512)
     return _model
 
 
@@ -26,7 +28,9 @@ def _passage(c):
     # Must match whatever build_vector.py's embed_text() produces — a
     # wrong-topic chunk can outscore the right one if the reranker only
     # sees raw body text without its heading/section label for context.
-    return f'{c["heading"]} — {c["section"]}\n{c["text"]}'
+    heading = c.get("heading") or c.get("chapter") or c.get("law_name", "")
+    section = c.get("section") or c.get("section_no", "")
+    return f'{heading} — มาตรา {section}\n{c.get("text", "")}'
 
 
 def rerank(query, candidates, k=config.RERANK_K):

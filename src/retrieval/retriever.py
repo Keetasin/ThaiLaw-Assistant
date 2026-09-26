@@ -19,6 +19,7 @@ from collections import defaultdict
 
 import chromadb
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 
 from src import config
@@ -40,7 +41,8 @@ def dynamic_k(query):
 
 class Retriever:
     def __init__(self, collection_name="law"):
-        self.emb = SentenceTransformer(config.EMBED_MODEL, device="cpu")
+        device = config.EMBED_DEVICE if config.EMBED_DEVICE == "cpu" or torch.cuda.is_available() else "cpu"
+        self.emb = SentenceTransformer(config.EMBED_MODEL, device=device)
         client = chromadb.PersistentClient(config.CHROMA_DIR)
         self.col = client.get_collection(collection_name)
 
