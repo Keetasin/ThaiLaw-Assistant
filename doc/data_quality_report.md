@@ -96,13 +96,27 @@ parse correctly).
 | Form | 2 | | HELD_BY | 7 |
 | Law | 1 | | IMPOSES_DUTY | 7 |
 | | | | BINDS | 7 |
-| **total** | **326** | | **total** | **686** |
+| | | | ABOUT | 35 |
+| **total** | **326** | | **total** | **720** |
 
 vs. PLAN.md §4.2's 13-node-type target: **12/13 present**. `Penalty` is the one
 missing type — no `HAS_PENALTY` triple happened to be in the 30-triple LLM-extraction
 sample (see §5), so no Penalty nodes exist yet; this is a sampling gap, not a code gap
 (`graph_core.merge_triples_and_topics` already handles `HAS_PENALTY` if/when one is
 extracted). `AMENDED_BY` (Law→Law) isn't applicable with a single-statute corpus.
+
+**ABOUT edges (Section→Topic) went from 1 to 35** in a round-2 fix: the curated
+topic CSV (`data/curated/topic_agency_evidence_form_step.csv`) gained a `sections`
+column, hand-verified against the actual (glyph-corrupted, see §3) section text for
+9 topics directly implicated in known retrieval-miss test cases (ลาป่วย→32|57,
+ลากิจ→34|57/1, ลาคลอด→41|43|59, การร้องเรียนแรงงาน→123, การเลิกจ้าง/ค่าชดเชย→118 series).
+Separately, `GraphRetriever._offline()` (`src/retrieval/graph.py`) had a real bug: its
+topic-only branch returned **every Section node in the graph, in arbitrary dict
+order** instead of walking these ABOUT edges at all — so even before this CSV fix,
+any ABOUT edges that existed were never used by the offline retriever the live app
+actually runs on. Both are fixed now; verified directly against 3 known-failing
+questions (sick leave, personal leave, termination-complaint-procedure) — see
+`doc/report.md`'s out-of-scope/graph-fix section for before/after evidence.
 
 Degree distribution (Section nodes): min 1, max 73, mean 4.48 — the max-73 section is
 one heavily cross-referenced/penalized section, consistent with PLAN §4.1's premise

@@ -18,6 +18,9 @@ flowchart TD
   Duty --> Actor
 ```
 
-The offline graph artifact is `data/graph.json`; `visualisation.svg` contains
-the generated graph view. A live Neo4j Browser capture remains pending until
-the Docker/Neo4j service is available.
+The offline graph artifact is `data/graph.json` (326 nodes / 720 edges, see
+`doc/data_quality.md`); `visualisation.svg` (this dir) contains the generated graph view.
+`eval/neo4j_results/screenshot_*.png` are Neo4j Browser captures but are
+**stale** (taken against an earlier deterministic-only load, 211 nodes / 3
+labels) — see `doc/data_quality.md`'s "Known limitations" for the exact
+command to reload the current merged graph and re-capture.

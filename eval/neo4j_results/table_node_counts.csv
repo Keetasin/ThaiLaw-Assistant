@@ -1,4 +1,13 @@
-node_labels,node_count
-[Chapter],22
-[Law],1
-[Section],188
+node_label,node_count
+Actor,4
+Agency,3
+Chapter,18
+Duty,7
+Evidence,24
+Form,2
+Law,1
+Right,7
+Section,188
+Step,19
+Term,23
+Topic,30

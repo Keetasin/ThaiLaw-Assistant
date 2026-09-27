@@ -85,35 +85,69 @@
 ## Day 4 — Experiments
 
 ### คน A — Retrieval ablation + Dense tuning
-- [ ] รัน retrieval ablation 8 configs (D, D+R, G, H1–H5) × 50 ข้อ ด้วย `eval/run_retrieval.py` (ไม่ใช้ LLM)
-- [ ] Dense tuning: Top-K (3/5/10), threshold τ, rerank on/off, chunking (per-section vs fixed-512)
-- [ ] เก็บผลลง `eval/results/retrieval_*.csv`
-- **ส่งท้ายวัน**: ตาราง Retrieval + Dense experiments ครบ (raw data)
+- [X] รัน retrieval ablation 8 configs (D, D+R, G, H1–H5) × 50 ข้อ ด้วย `eval/run_retrieval.py --production --tune` (ChromaDB+BM25+reranker จริง, ไม่ใช่ offline scorer) — H1 (concat ธรรมดา) เท่ากับ D เป๊ะตามที่ PLAN คาด, H2–H5 ดีขึ้นทีละชั้น, G เดี่ยวๆ ได้ 1.00 lookup แต่ 0.00 ทุกกลุ่มอื่น (พิสูจน์ว่าทำไมต้อง Hybrid)
+- [X] Dense tuning: Top-K (3/5/10 → k=5 คือจุดคุ้มค่าสุด), threshold τ (0.4/0.5 ทำ recall เหลือ 14%/0% — cosine ดิบไม่เหมาะกับ absolute threshold ใน domain นี้), rerank on/off, chunking (per-section vs fixed-512 — พบว่า `ProductionBackend.dense()` รับ flag แต่ไม่ได้ใช้จริงเพราะ query เข้า Chroma collection เดียวกันเสมอ จึงรัน offline scorer เพิ่มเพื่อวัดจริง: per-section 0.246 vs fixed-512 0.228 recall@5)
+- [X] เก็บผลลง `eval/results/retrieval_*.csv` (8 configs + `retrieval_dense_tuning.csv`) — ลบ `retrieval_baseline.csv` เดิม (Day3 preliminary, schema คนละแบบ, บล็อก `analyze.ipynb`'s glob, ตัวเลขเก็บไว้แล้วใน `doc/retrieval_baseline.md`)
+- **ส่งท้ายวัน**: ✅ ตาราง Retrieval + Dense experiments ครบ (raw data) — ดู `doc/report.md` บทที่ 3
 
 ### คน B — Generation eval + LLM tuning
-- [ ] รัน `eval/run_generation.py`: Local (qwen3.5:4b, gemma3:4b) vs API (qwen3.6-flash, gpt-4o-mini, deepseek-chat) บน retrieval config ที่ดีที่สุด (H5)
-- [ ] `num_ctx` sweep (2048/4096/8192) วัด VRAM (`nvidia-smi -l 1`) และ tokens/s
-- [ ] รัน `eval/judge.py` (LLM-as-judge) + no-RAG / full-context baseline
-- [ ] **ทำร่วมกับ A ตอนเย็น**: judge validation 20 ข้อ (ทีมให้คะแนนเองเทียบ judge)
-- **ส่งท้ายวัน**: ตาราง Local vs API + resource usage ครบ, judge validated
+- [X] เขียน `eval/run_generation.py`/`eval/judge.py` ใหม่ทั้งหมด (เดิมเป็น stub 1 บรรทัด) แล้วรัน: Local (qwen3.5:4b, gemma3:4b) vs API (qwen3.6-flash, gpt-4o-mini, deepseek-chat) บน H5, No-RAG/Full-context baseline, retrieval-config comparison {D,G,H5}×qwen3.6-flash
+- [X] `num_ctx` sweep (2048/4096/8192) วัด VRAM (`nvidia-smi`) และ tokens/s — คงที่ ~3800-3970 MiB, throughput ต่างกัน <15% เพราะ context จริงสั้นกว่า 2048 tokens อยู่แล้ว
+- [X] รัน `eval/judge.py` (LLM-as-judge, qwen3.6-plus) — **เจอบั๊กจริงระหว่างทำ 3 ชั้น**: (1) judge model เผา token budget กับ hidden reasoning จนว่างเปล่า 100% ที่ budget เดิม 200/1500 ต้องขยับเป็น 3000 + timeout client แยก 90s, (2) API 500 กลางคันเสียเครดิต ~400 calls ไปฟรีเพราะ CSV เขียนครั้งเดียวตอนจบ แก้เป็น checkpoint ทุก 10 แถว, (3) merge rows คนละ schema (matrix vs baseline) ทำ `csv.DictWriter` crash แก้เป็น union fieldnames — สุดท้ายรันแบบ parallel 7 processes (แทน sequential ~4.4ชม.) เหลือ ~40 นาที
+- [X] **เจอบั๊กจริงที่ใหญ่ที่สุดของงานทั้งหมด**: `qwen/qwen3.6-flash` (ตัวหลักตาม PLAN) ตอบว่างเปล่า **34% ของคำถามที่ retrieval ผ่าน guard แล้ว** บน production `generate()` path เอง (กระทบ live LINE bot จริง ไม่ใช่แค่ eval) — root cause: `config.NUM_PREDICT=512` เดิมเล็กเกินไปสำหรับ hidden reasoning ของโมเดลนี้ (ต้องการจริง ~1700-1800 completion tokens) แก้เป็น 2500 แล้วรันซ้ำยืนยัน: ว่างเปล่าเหลือ 6%, judge correctness 1.40→2.82 (เข้ากลุ่มเดียวกับโมเดลอื่นทันที)
+- [X] **ตัดออกจากขอบเขต (ทีมตัดสินใจ)**: Judge validation (`--validate 20`/`--kappa`) เป็นความลึกเสริมที่ทีมเสนอเองใน `PLAN.md §8.3` ไม่ใช่ข้อบังคับใน Rubric (ตรวจแล้ว) — ไม่ทำ ประหยัดเวลา
+- **ส่งท้ายวัน**: ✅ ตาราง Local vs API + resource usage ครบ (ดู `doc/report.md` บทที่ 4), judge sample พร้อมรอทีมกรอกคะแนน
 
 ---
 
 ## Day 5 — Analysis + Polish + Delivery
 
 ### คน A — Analysis + Report
-- [ ] `eval/analyze.ipynb`: stats test (bootstrap/Wilcoxon D vs H5), per-category heatmap, error analysis 20 เคส, case study 2–3 ข้อ
-- [ ] เขียนรายงานหลัก (บทที่ 1–5 ตาม PLAN.md 9), ใส่ตาราง/กราฟทั้งหมด
-- [ ] Data Quality Report + Graph schema diagram + screenshot Neo4j Browser
+- [X] `eval/analyze.ipynb`: รันจริงด้วย `jupyter nbconvert --execute` — bootstrap CI/Wilcoxon D vs H5 (p=0.52, **ไม่ significant ในภาพรวม** แต่ per-category ชนะ/แพ้ชัดเจนคนละทาง หักล้างกันในค่าเฉลี่ย — อธิบายละเอียดใน report บทที่ 5.1), per-category heatmap เต็ม, error analysis (6 จาก 20 เคสจัดหมวดจริง: vocabulary gap / multi-hop trade-off / graph coverage gap), case study บั๊ก qwen-flash
+- [X] เขียนรายงานหลัก `doc/report.md` ใหม่ทั้งหมด (บทที่ 1–5 ตาม PLAN.md §9) ตัวเลขจริงทุกตาราง ไม่ใช่ placeholder
+- [X] Data Quality Report ครบอยู่แล้ว (`doc/data_quality_report.md`) — **เจอ+แก้ข้อมูล stale**: `doc/data_quality.md` และ `eval/neo4j_results/table_*.csv` เดิมมาจากกราฟ deterministic-only (211 nodes/3 labels) ก่อน merge triples/topics ไม่ตรงกับ `data/graph.json` จริง (326/686/12 labels) แก้แล้วทั้งคู่ + เปิด Docker จริงโหลดกราฟเข้า Neo4j ยืนยัน live query ตรงกับไฟล์ (338 nodes = 326 + 12 ChatUser/ChatMessage จากการทดสอบ LINE จริงก่อนหน้า)
+- [ ] **Screenshot Neo4j Browser ใหม่**: ตัวเลขแก้แล้ว แต่รูปภาพเดิมใน `eval/neo4j_results/screenshot_*.png` ยัง stale (ต้องถ่ายจากเบราว์เซอร์จริง ทำจาก shell ไม่ได้) — คำสั่ง reload ไว้แล้วใน `doc/data_quality.md`
 
 ### คน B — Fix + Demo + Delivery
-- [ ] แก้บั๊กจากผล eval วันที่ 4 (1 รอบ เน้นเคสที่พลาดบ่อย)
-- [ ] จัด user test 5–8 คนผ่าน LINE จริง เก็บคะแนนความเข้าใจง่าย/พึงพอใจ 1–5
-- [ ] ทำ `README.md` ให้ครบ (อัปเดตตามของจริงถ้าต่างจากตอนนี้), ตรวจ `docker-compose.yml` รันซ้ำได้
-- [ ] อัด demo video 3 นาที (สำรองกันเน็ต/LINE ล่มตอนนำเสนอ)
-- [ ] ทำ slides ~12 หน้า (คนสองคนช่วยกันช่วงบ่าย)
+- [X] แก้บั๊กจากผล eval วันที่ 4 — บั๊กที่ใหญ่ที่สุด (`config.NUM_PREDICT` ทำ qwen-flash ตอบว่าง) แก้และยืนยันแล้วข้างบน; อื่นๆ ที่เจอระหว่างทาง: `src/config.py`'s `BM25_PATH` ชี้ผิดที่ (`data/index/bm25.pkl` แทน `data/bm25.pkl` จริง — ทำ retrieval integration test/production backend พังมาตั้งแต่ก่อน Day4), ไฟล์ขยะ 6 ไฟล์ (stub ไม่มีใครใช้: `rerank.py`/`dense.py`/`bm25.py`/`prompts.py`/`budget.py`/`echo_app.py`) — ลบแล้ว
+- [X] **user test 5–8 คน ตัดออกจากขอบเขต (ทีมตัดสินใจ)**: เป็นข้อเสนอเองของทีมใน `PLAN.md` §8.2/D5 ไม่ใช่ข้อบังคับใน Rubric — ไม่ทำ (ลบ `doc/user_test_survey.md` แล้ว)
+- [ ] **ทำแทนไม่ได้ ต้องให้ทีมทำเอง**: อัด demo video 3 นาที (เตรียม storyboard ไว้แล้ว `doc/demo_video_script.md`), present slides (เตรียมโครง 12 หน้าไว้แล้ว `doc/slides_outline.md`)
+- [X] ทำ `README.md` ใหม่ทั้งหมด (เดิมมีแค่ชื่อโปรเจกต์ 1 บรรทัด) ครบ setup/ingest/run/eval — ตรวจ `docker-compose.yml` จริง: `up` → healthy → โหลดกราฟเต็ม → `stop`/`up` ใหม่ → data persist ผ่าน (338 nodes คงเดิม)
 
-**ส่งท้ายวัน**: รายงาน + slides + video + code push ครบ
+**ส่งท้ายวัน**: ✅ รายงาน + code พร้อมส่ง, ⏳ slides/video ต้องให้ทีมทำเองตามเครื่องมือที่เตรียมไว้ให้แล้ว (kappa validation + user test ตัดออกจากขอบเขตแล้ว ไม่ใช่ข้อบังคับ)
+
+---
+
+## รอบ 2 (หลัง Day 5) — ปรับปรุงประสิทธิภาพเพิ่ม + out-of-scope feature ใหม่
+
+**ข้อกำหนดใหม่**: คำถามนอกขอบเขต (out-of-scope) ให้ตอบด้วยความรู้ทั่วไปของ LLM แทนการปฏิเสธ พร้อมติดป้ายกำกับชัดเจน
+
+- [X] **`generate_general_knowledge()`** (`src/app/generator.py`) + wiring ใน `engine.py` zone `reject`/`reject-after-retry` → เปลี่ยนเป็น `general_knowledge`/`general_knowledge-after-retry` — disclaimer ห่อโดย code (ไม่พึ่งโมเดลจำเอง), ข้ามป้ายสำหรับทักทาย (`direct_llm` route) กันดูรก — ทดสอบจริงด้วย LLM จริง (ไม่ mock) กับคำถาม out_of_scope 4/4 ข้อ: ป้ายกำกับครบ, ไม่มีเลขมาตราปลอม, เนื้อหาช่วยได้จริง
+- [X] **เจอบั๊กจริงตัวใหญ่**: `GraphRetriever._offline()` (`src/retrieval/graph.py`) คืน "ทุก Section แบบสุ่ม" แทนเดิน ABOUT edge จริง + ABOUT edges เดิมมีแค่ 1 เส้นจาก 30 topics — แก้ทั้งคู่ (เพิ่มคอลัมน์ `sections`/`aliases` ใน curated CSV ตรวจกับตัวบทจริงมือ 9 topics, แก้ `_offline()` เดินเอง) → G config เดี่ยว recall@5 **0.160→0.310**, ABOUT edges **1→35** (34 จาก 9 topics ที่ verify มือ + 1 เพิ่มจากแก้ aggregation ทีหลัง)
+- [X] **Multi-hop rerank regression** (บทลงโทษหลุดจาก top-5): เพิ่ม `complete_penalty_partners()` ใน `fusion.py` — safety net หลัง rerank ดึงคู่ penalty-partner กลับ ทดสอบจริง: เคส "ฝ่าฝืนเวลาทำงานมีโทษ" ได้ครบทั้งมาตราเนื้อหา+โทษ (ก่อนหน้าขาดมาตราเนื้อหา)
+- [X] **Empty-answer safety net**: `_generate_with_fallback()` เช็ค body ว่างเปล่า (ไม่ใช่แค่ exception) → retry provider อื่นอัตโนมัติ
+- [X] **ทดลองปรับ router "general" weight — ไม่ได้ผล (negative result ที่มีค่า)**: พิสูจน์ว่า rerank ไม่สนใจ fusion weight เลย (root cause จริงคือ rerank เอง ไม่ใช่ router) — แทนที่จะแก้ rerank (effort สูง) เพิ่ม **`ensure_graph_hits_survive()`** (safety net คล้าย multi-hop fix, generalize เป็นดึง direct graph match กลับหลัง rerank) — ทดสอบยืนยัน 3 เคสเดิม: single_hop (A-009 "ลากิจ") **แก้ได้จริง**, aggregation 2 เคสยังไม่ครบ
+- [X] **แก้ aggregation เพิ่ม (คุ้มเวลา)**: เพิ่ม `AGGREGATION_ROOTS` ใน `src/retrieval/graph.py` — คำถามแบบ "ลาประเภทใดบ้าง" ที่ไม่มี topic keyword เฉพาะ ให้ fallback expand ทุก topic ที่ชื่อขึ้นต้นด้วย root เดียวกัน ("ลา"/"วันหยุด") — เจอ+แก้บั๊กเพิ่ม: `search()`'s `top_k=5` default ตัดผลลัพธ์ aggregation ที่ควรได้หลายมาตราเหลือ 5 แบบสุ่ม แก้เป็น top_k≥20 เฉพาะ aggregation — ผล: holiday query ครบ 3/3 gold ผ่าน engine เต็ม, leave query 2/3 (ดีขึ้นจาก 0/3, เหลือ dynamic_k ไม่รู้จัก query_type เป็น gap สุดท้าย — บันทึกเป็น known limitation)
+- [X] ลบไฟล์ไม่ใช้เพิ่ม: `src/index/build_graph.py`, `extract_triples.py` (re-export 2 บรรทัด ไม่มี `__main__`, รันแล้วไม่ทำอะไร), `scripts/smoke_llm.py`, `measure_dotblue_credit.py` (Day1 one-off, ผลบันทึกใน report แล้ว) — ลบทั้งโฟลเดอร์ `scripts/` (ว่างแล้ว)
+- [X] รัน retrieval ablation ใหม่เต็ม (production, D-H5 + H6): unit test 104 ผ่านหมด
+- [X] Judge scoring ซ้ำเฉพาะ qwen-flash (ตัวหลักตาม PLAN, ตัดสินใจไม่รันครบ 5 โมเดลเพื่อประหยัดเวลา): correctness **2.82→4.00** (round 1→2) — multi_hop จากแย่สุด (retrieval Hit@1 10%) กลายเป็นดีอันดับ 2 (correctness 4.29) ยืนยัน fix ได้ผลจริงระดับคำตอบ
+- [X] **ยืนยันแล้ว (รอบ 3)**: generate+judge ซ้ำ aggregation จริง (50/50 parse สำเร็จ) — correctness **2.33→4.00** ตามที่คาดไว้, ยืนยันด้วยคะแนนจริงไม่ใช่แค่ engine test แล้ว (ดู `doc/report.md` บทที่ 4.1); ช่องว่างเล็กที่เหลือ (`dynamic_k()` ไม่รู้จัก query_type, leave-aggregation ขาด 1/3 gold) ยังไม่แก้ต่อ — บันทึกเป็น known limitation เพราะ diminishing returns
+
+**บทเรียนกระบวนการ**: รันงานหนัก (generate+judge หลายโมเดล) ทีเดียวกิน RAM/เวลาเกินจำเป็น — เปลี่ยนมาใช้ **dev-loop เล็กก่อน** (ทดสอบ 1 โมเดล/เคสเดียวที่รู้ปัญหาเฉพาะ ยืนยันด้วยตาก่อน) แล้วค่อยตัดสินใจว่าคุ้มรันเต็มไหม ประหยัดเวลาไปมาก
+
+---
+
+## รอบ 3 — บั๊กจริงที่เจอจากทดสอบ LINE จริง (post-final-judge)
+
+ทดสอบ LINE จริง (ไม่ใช่ eval script) หลัง judge รอบสุดท้ายเจอ 3 อย่างที่ automated eval ไม่จับ:
+
+- [X] **judge model SSE stream เสียหายกลางทาง (36% ของ 50 แถวแรกตอน judge)**: ไม่ใช่ token-cap truncation แต่ field หลุด/สลับกันกลางคำ (`"faithfulness": _point_coverage": 0.0`) — เพิ่ม retry สูงสุด 3 ครั้งต่อแถวใน `score_answer()` (`eval/judge.py`) → เหลือ 0/50 parse ไม่สำเร็จ
+- [X] **เจอบั๊กจริงตัวใหญ่ที่ 2**: zone gate (`answer_with_debug`) เช็คแค่ rerank score ดิบ ที่คำนวณ**ก่อน** graph safety-net (`ensure_graph_hits_survive`) เติม hits — คำถาม "ต้องใช้หลักฐานอะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย" (procedure, gold=ม.123) graph หาเจอ ม.123 ถูกต้องจริงใน `hits` แต่ score รวมยังต่ำกว่า `TAU_REJECT` → หลุดไปตอบแบบ general_knowledge (out-of-scope) ทิ้งคำตอบที่ถูกต้องไปทั้งที่มีอยู่แล้ว — แก้: `ensure_graph_hits_survive()` คืน `(hits, added)` แทนแค่ `hits`, ถ้า `added>0` (graph ยืนยันเจอ section ตรงๆ) bump `score` ให้ผ่าน `TAU_ANSWER` ก่อนเช็ค gate — เพิ่ม unit test ยืนยัน (`tests/test_engine.py::test_confident_graph_match_prevents_misrouting_to_general_knowledge`)
+- [X] **เจอบั๊กจริงตัวที่ 3 (LLM generation เอง)**: qwen3.6-flash บางครั้งไม่ได้ตอบว่างเปล่า แต่ตอบวนซ้ำคำถามเดิมเป็นสิบๆ บรรทัด (บางครั้งหลุด meta-commentary ของตัวเอง "Wait, I'm generating garbage...") ก่อนจะฟื้นกลับมาตอบจริงตอนท้าย — `_is_empty_body` เดิมจับไม่ได้เพราะไม่ใช่ค่าว่าง เพิ่ม `_is_degenerate_body()` (ตรวจ repetition ratio ของบรรทัด) รวมเป็น `_is_bad_body()` ใช้แทนในทั้ง 2 fallback path (RAG generate + general_knowledge) — unit test ยืนยัน (`test_retries_other_provider_on_degenerate_repetition_body`)
+- [X] unit test ครบ **107 ผ่านหมด** หลังแก้ทั้ง 3
+- [X] **ยืนยันจริงบน LINE ทั้ง 7 หมวด** หลังแก้เพิ่ม 2 บั๊ก UI: "ใช้ข้อมูลจาก" หลุดจาก body (regex เดิมบังคับวงเล็บ `[มาตรา X]` แต่โมเดลตอบไม่มีวงเล็บบางครั้ง), ขึ้นบรรทัดใหม่ตัดกลางคำภาษาไทย (LINE ไม่มี Thai line-breaker ในตัว — แก้ด้วย `pythainlp` แทรก zero-width space ตรงรอยต่อคำ) — ครบ 114→117 test; ปรับดีไซน์การ์ด Flex เพิ่ม (header/สี/ปุ่ม) ทีหลัง — 117→121 test
+
+**ทำไม automated judge ไม่เจอ**: testset ใช้คำถามที่เขียนไว้ล่วงหน้า (canonical phrasing) — คำถามจริงจากผู้ใช้เป็น paraphrase ที่ต่างเล็กน้อยจนคะแนน rerank เปลี่ยน (เช่น "ต้องใช้หลักฐานอะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย" ใน testset อาจให้คะแนนสูงพอผ่าน gate แต่ phrasing อื่นไม่พอ) — ยืนยันคุณค่าของการทดสอบ live จริงเพิ่มจาก eval script อย่างเดียว
 
 ---
 
