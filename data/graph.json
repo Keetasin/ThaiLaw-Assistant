@@ -5068,6 +5068,56 @@
       "target": "Step:ยื่นคำร้อง"
     },
     {
+      "source": "Section:LPA2541:53",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:61",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:63",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:64",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:65",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:68",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:70",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:72",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:74",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
+      "source": "Section:LPA2541:76",
+      "type": "ABOUT",
+      "target": "Topic:ค่าจ้างล่วงเวลา"
+    },
+    {
       "source": "Topic:ค่าจ้างล่วงเวลา",
       "type": "HANDLED_BY",
       "target": "Agency:กรมสวัสดิการและคุ้มครองแรงงาน"
@@ -5148,6 +5198,11 @@
       "target": "Step:ยื่นคำร้อง"
     },
     {
+      "source": "Section:LPA2541:28",
+      "type": "ABOUT",
+      "target": "Topic:วันหยุดประจำสัปดาห์"
+    },
+    {
       "source": "Topic:วันหยุดประจำสัปดาห์",
       "type": "HANDLED_BY",
       "target": "Agency:กรมสวัสดิการและคุ้มครองแรงงาน"
@@ -5166,6 +5221,11 @@
       "source": "Topic:วันหยุดประจำสัปดาห์",
       "type": "HAS_STEP",
       "target": "Step:ยื่นคำร้อง"
+    },
+    {
+      "source": "Section:LPA2541:29",
+      "type": "ABOUT",
+      "target": "Topic:วันหยุดตามประเพณี"
     },
     {
       "source": "Topic:วันหยุดตามประเพณี",
@@ -5188,6 +5248,11 @@
       "target": "Step:ตรวจสิทธิ"
     },
     {
+      "source": "Section:LPA2541:30",
+      "type": "ABOUT",
+      "target": "Topic:วันหยุดพักผ่อนประจำปี"
+    },
+    {
       "source": "Topic:วันหยุดพักผ่อนประจำปี",
       "type": "HANDLED_BY",
       "target": "Agency:กรมสวัสดิการและคุ้มครองแรงงาน"
@@ -5208,6 +5273,16 @@
       "target": "Step:ยื่นคำร้อง"
     },
     {
+      "source": "Section:LPA2541:32",
+      "type": "ABOUT",
+      "target": "Topic:ลาป่วย"
+    },
+    {
+      "source": "Section:LPA2541:57",
+      "type": "ABOUT",
+      "target": "Topic:ลาป่วย"
+    },
+    {
       "source": "Topic:ลาป่วย",
       "type": "HANDLED_BY",
       "target": "Agency:กรมสวัสดิการและคุ้มครองแรงงาน"
@@ -5226,6 +5301,16 @@
       "source": "Topic:ลาป่วย",
       "type": "HAS_STEP",
       "target": "Step:แจ้งนายจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:34",
+      "type": "ABOUT",
+      "target": "Topic:ลากิจ"
+    },
+    {
+      "source": "Section:LPA2541:57/1",
+      "type": "ABOUT",
+      "target": "Topic:ลากิจ"
     },
     {
       "source": "Topic:ลากิจ",
@@ -5248,6 +5333,21 @@
       "target": "Step:ยื่นคำขอ"
     },
     {
+      "source": "Section:LPA2541:41",
+      "type": "ABOUT",
+      "target": "Topic:ลาคลอด"
+    },
+    {
+      "source": "Section:LPA2541:43",
+      "type": "ABOUT",
+      "target": "Topic:ลาคลอด"
+    },
+    {
+      "source": "Section:LPA2541:59",
+      "type": "ABOUT",
+      "target": "Topic:ลาคลอด"
+    },
+    {
       "source": "Topic:ลาคลอด",
       "type": "HANDLED_BY",
       "target": "Agency:กรมสวัสดิการและคุ้มครองแรงงาน"
@@ -5266,6 +5366,11 @@
       "source": "Topic:ลาคลอด",
       "type": "HAS_STEP",
       "target": "Step:แจ้งนายจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:33",
+      "type": "ABOUT",
+      "target": "Topic:ลาเพื่อทำหมัน"
     },
     {
       "source": "Topic:ลาเพื่อทำหมัน",
@@ -5308,6 +5413,41 @@
       "target": "Step:แจ้งนายจ้าง"
     },
     {
+      "source": "Section:LPA2541:118",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:118/1",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:119",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:120",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:120/1",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:121",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:122",
+      "type": "ABOUT",
+      "target": "Topic:การเลิกจ้าง"
+    },
+    {
       "source": "Topic:การเลิกจ้าง",
       "type": "HANDLED_BY",
       "target": "Agency:กรมสวัสดิการและคุ้มครองแรงงาน"
@@ -5326,6 +5466,31 @@
       "source": "Topic:การเลิกจ้าง",
       "type": "HAS_STEP",
       "target": "Step:ตรวจเหตุเลิกจ้าง"
+    },
+    {
+      "source": "Section:LPA2541:118",
+      "type": "ABOUT",
+      "target": "Topic:ค่าชดเชย"
+    },
+    {
+      "source": "Section:LPA2541:118/1",
+      "type": "ABOUT",
+      "target": "Topic:ค่าชดเชย"
+    },
+    {
+      "source": "Section:LPA2541:119",
+      "type": "ABOUT",
+      "target": "Topic:ค่าชดเชย"
+    },
+    {
+      "source": "Section:LPA2541:120",
+      "type": "ABOUT",
+      "target": "Topic:ค่าชดเชย"
+    },
+    {
+      "source": "Section:LPA2541:120/1",
+      "type": "ABOUT",
+      "target": "Topic:ค่าชดเชย"
     },
     {
       "source": "Topic:ค่าชดเชย",
@@ -5606,6 +5771,11 @@
       "source": "Topic:สิทธิประโยชน์กรณีคลอดบุตร",
       "type": "HAS_STEP",
       "target": "Step:ยื่นคำขอ"
+    },
+    {
+      "source": "Section:LPA2541:123",
+      "type": "ABOUT",
+      "target": "Topic:การร้องเรียนแรงงาน"
     },
     {
       "source": "Topic:การร้องเรียนแรงงาน",

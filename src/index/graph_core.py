@@ -97,6 +97,11 @@ def merge_triples_and_topics(graph: dict, triples: list[dict], topic_rows: list[
         if not topic:
             continue
         topic_id = node("Topic", topic, {"name": topic})
+        for section_no in (s.strip() for s in (row.get("sections") or "").split("|")):
+            if not section_no:
+                continue
+            section_id = node("Section", f"{law_id}:{section_no}", {"law_id": law_id, "section_no": section_no})
+            edge(section_id, "ABOUT", topic_id)
         for kind, col, relation in (
             ("Agency", "agency", "HANDLED_BY"),
             ("Evidence", "evidence", "REQUIRES_EVIDENCE"),

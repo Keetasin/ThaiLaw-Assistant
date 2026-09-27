@@ -29,6 +29,18 @@ class GraphRetrievalTests(unittest.TestCase):
         self.assertTrue(result["fallback"])
         self.assertTrue(result["sections"])
 
+    def test_aggregation_query_expands_across_every_topic_in_the_category(self):
+        # doc/report.md §3.5: "ลาประเภทใดบ้าง"-style queries don't name any
+        # one topic alias, so link_entities' normal substring match finds
+        # nothing -- AGGREGATION_ROOTS fans out to every topic starting with
+        # a category root word ("ลา", "วันหยุด") instead. Also regresses the
+        # top_k=5 truncation bug this uncovered (search() bumps top_k for
+        # aggregation specifically, see graph.py).
+        result = self.retriever.search("สิทธิวันหยุดของลูกจ้างมีประเภทใดบ้าง")
+        secs = {s.get("section_no") for s in result["sections"]}
+        self.assertEqual(result["query_type"], "aggregation")
+        self.assertTrue({"28", "29", "30"}.issubset(secs))
+
     def test_templates_are_parameterized(self):
         self.assertEqual(set(CYpher_TEMPLATES), {"lookup", "procedure", "penalty", "definition", "aggregation"})
         self.assertTrue(all("$" in query for query in CYpher_TEMPLATES.values()))

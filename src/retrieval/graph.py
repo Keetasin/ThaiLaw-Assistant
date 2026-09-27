@@ -9,6 +9,13 @@ SECTION_RE = re.compile(r"มาตรา\s*([๐-๙0-9]+(?:\s*/\s*[๐-๙0-9]
 THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 QUERY_TYPES = {"lookup", "procedure", "penalty", "definition", "aggregation"}
 
+# Category-root words for aggregation queries that ask about a whole family
+# of topics at once ("ลูกจ้างมีสิทธิลาประเภทใดบ้าง") rather than naming any
+# one topic's alias -- link_entities()'s normal substring-alias match finds
+# nothing for these (doc/report.md §3.5), so aggregation queries fall back
+# to matching every topic whose name starts with one of these roots instead.
+AGGREGATION_ROOTS = ("ลา", "วันหยุด")
+
 QUERY_TYPE_KEYWORDS = {
     "procedure": ("ทำอย่างไร", "ขั้นตอน", "หลักฐาน", "ร้องเรียน", "ยื่น"),
     "penalty": ("โทษ", "ปรับ", "จำคุก", "ฝ่าฝืน", "ไม่จ่าย"),
@@ -64,13 +71,37 @@ class GraphRetriever:
         lowered = query.casefold()
         for alias, topic in self.aliases.items():
             if alias in lowered and topic not in topics: topics.append(topic)
-        return {"section_nos": sections, "topics": topics, "terms": topics, "query_type": infer_query_type(query)}
+        query_type = infer_query_type(query)
+        if query_type == "aggregation" and not topics:
+            all_topics = sorted(set(self.aliases.values()))
+            for root in AGGREGATION_ROOTS:
+                if root in query:
+                    topics.extend(t for t in all_topics if t.startswith(root) and t not in topics)
+        return {"section_nos": sections, "topics": topics, "terms": topics, "query_type": query_type}
+
+    def _sections_about_topics(self, topics: list[str]) -> list[dict]:
+        """Section --[:ABOUT]--> Topic, walked in-memory. Previously this
+        case fell through to "every Section node in the graph" (order was
+        whatever dict insertion order happened to be, i.e. arbitrary) —
+        found by tracing why topic-only queries like "ลูกจ้างลาป่วยได้กี่วัน"
+        returned unrelated sections despite `link_entities` correctly
+        matching the "ลาป่วย" topic and `data/graph.json` already having the
+        right ABOUT edges (see doc/data_quality_report.md's topic/ABOUT
+        rebuild): the edges existed but nothing here ever walked them."""
+        topic_ids = {n["id"] for n in self._nodes.values() if n.get("label") == "Topic" and n.get("name") in topics}
+        if not topic_ids:
+            return []
+        section_ids = {e["source"] for e in self._edges if e["type"] == "ABOUT" and e["target"] in topic_ids}
+        return [self._nodes[sid] for sid in section_ids if sid in self._nodes]
 
     def _offline(self, entities: dict, top_k: int) -> GraphResult:
         wanted = set(entities["section_nos"])
-        section_nodes = [n for n in self._nodes.values() if n.get("label") == "Section" and (not wanted or str(n.get("section_no")) in wanted)]
-        if not wanted and entities["topics"]:
-            section_nodes = [n for n in self._nodes.values() if n.get("label") == "Section"]
+        if wanted:
+            section_nodes = [n for n in self._nodes.values() if n.get("label") == "Section" and str(n.get("section_no")) in wanted]
+        elif entities["topics"]:
+            section_nodes = self._sections_about_topics(entities["topics"])
+        else:
+            section_nodes = []
         section_nodes = section_nodes[:top_k]
         ids = {n["id"] for n in section_nodes}
         edges = [e for e in self._edges if e["source"] in ids or e["target"] in ids][:top_k]
@@ -81,6 +112,14 @@ class GraphRetriever:
         entities = self.link_entities(query)
         if query_type in QUERY_TYPES: entities["query_type"] = query_type
         selected = entities["query_type"]
+        if selected == "aggregation":
+            # "ลาประเภทใดบ้าง"-style queries fan out to every section ABOUT
+            # every topic under one category root (link_entities' fallback,
+            # see AGGREGATION_ROOTS) -- the default top_k=5 was built for
+            # narrow lookup/procedure/penalty queries (1-3 sections) and was
+            # silently truncating a real multi-topic answer down to
+            # whichever 5 happened to come first in dict order.
+            top_k = max(top_k, 20)
         if self.driver is None: return self._offline(entities, top_k).as_dict()
         params = {"section_nos": entities["section_nos"], "topics": entities["topics"], "terms": entities["terms"], "top_k": top_k}
         sections, paths, triples = [], [], []
@@ -103,5 +142,10 @@ def load_aliases(csv_file: str | Path) -> dict[str, str]:
     with open(csv_file, encoding="utf-8-sig", newline="") as stream:
         for row in csv.DictReader(stream):
             topic = row.get("topic", "").strip()
-            if topic: aliases[topic] = topic
+            if not topic:
+                continue
+            aliases[topic] = topic
+            for alias in (a.strip() for a in (row.get("aliases") or "").split("|")):
+                if alias:
+                    aliases[alias] = topic
     return aliases
