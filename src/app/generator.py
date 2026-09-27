@@ -46,9 +46,16 @@ def parse_citation(answer, sections):
     finds a citation, every retrieved section is treated as cited — better to
     over-cite than to show an unsourced answer.
     """
-    trailer = re.search(r"^ใช้ข้อมูลจาก:\s*((?:\[มาตรา\s*[0-9/]+\]\s*,?\s*)*)\s*$", answer, re.M)
+    # Lenient on purpose: the system prompt asks for "[มาตรา X]" brackets,
+    # but the model doesn't always comply (seen live: "ใช้ข้อมูลจาก: มาตรา
+    # 118" with no brackets at all) -- match the whole trailer line
+    # regardless of bracket formatting, then pull section numbers out of
+    # whatever's there, so a format slip doesn't leave this line unstripped
+    # and leaking into the user-visible answer (it's redundant with the
+    # Flex card's own "มาตรา" section either way).
+    trailer = re.search(r"^ใช้ข้อมูลจาก:.*$", answer, re.M)
     if trailer:
-        cited_nos = set(re.findall(r"\[มาตรา\s*([0-9/]+)\]", trailer.group(1)))
+        cited_nos = set(re.findall(r"มาตรา\s*([0-9/]+)", trailer.group(0)))
         clean_answer = answer[: trailer.start()].rstrip()
     else:
         cited_nos = set(re.findall(r"\[มาตรา\s*([0-9/]+)\]", answer))
@@ -77,6 +84,44 @@ def _generate_from_context_text(context, sections_for_citation, question, provid
         for s in cited_sections
     )
     return f"{answer}\n\nที่มา: พระราชบัญญัติคุ้มครองแรงงาน พ.ศ. 2541\n{citation}"
+
+
+GENERAL_KNOWLEDGE_SYSTEM_PROMPT = """คุณคือผู้ช่วยตอบคำถามทั่วไป คำถามนี้อยู่นอกเหนือขอบเขตของพระราชบัญญัติคุ้มครองแรงงาน พ.ศ. 2541 ที่คุณมีข้อมูลตรวจสอบแล้ว
+ตอบเป็นภาษาไทย กระชับ ตรงประเด็น จากความรู้ทั่วไปของคุณเอง
+
+กติกา:
+- ห้ามอ้างเลขมาตรากฎหมายใดๆ เด็ดขาด (ไม่มีตัวบทให้ตรวจสอบในคำถามนี้ อ้างแล้วเสี่ยงเป็นข้อมูลเท็จ)
+- ถ้าคำถามเกี่ยวกับกฎหมายเรื่องอื่น (ไม่ใช่คุ้มครองแรงงาน) ให้ตอบตามความรู้ทั่วไป แต่ระบุว่าควรตรวจสอบกับผู้เชี่ยวชาญเฉพาะทาง
+- ถ้าเป็นคำถามทักทาย/ทั่วไปที่ไม่เกี่ยวกฎหมายเลย ตอบให้เป็นธรรมชาติ"""
+
+_GENERAL_KNOWLEDGE_HEADER = (
+    "⚠️ คำถามนี้อยู่นอกขอบเขตของ พ.ร.บ.คุ้มครองแรงงาน พ.ศ. 2541 ที่ระบบมีข้อมูล "
+    "— คำตอบด้านล่างมาจากความรู้ทั่วไปของ AI (LLM) ไม่ได้อ้างอิงตัวบทที่ตรวจสอบแล้ว\n\n"
+)
+_GENERAL_KNOWLEDGE_FOOTER = "\n\nควรตรวจสอบกับทนายความหรือหน่วยงานที่เกี่ยวข้องก่อนนำไปใช้จริง"
+
+
+def generate_general_knowledge(question, provider="local", disclaim=True):
+    """Out-of-scope fallback (engine.py's `reject`/`reject-after-retry`
+    zones): answer from the LLM's own knowledge instead of a flat refusal,
+    but the disclaimer is wrapped by CODE, not left to the model to
+    remember to write — this must appear on every single call, not just
+    the ones where the model happens to follow that instruction.
+
+    `disclaim=False` (engine.py passes this for router.py's "direct_llm"
+    route -- greetings/thanks) skips the legal-disclaimer banner: wrapping
+    "⚠️ ... ควรตรวจสอบกับทนายความ..." around "สวัสดีครับ ยินดีช่วยเหลือครับ"
+    is jarring UX noise, not a real out-of-scope answer that could be
+    mistaken for legal advice."""
+    llm = get_llm(provider=provider)
+    prompt = f"{GENERAL_KNOWLEDGE_SYSTEM_PROMPT}\n\nคำถาม: {question}"
+    answer, _usage = llm.chat([{"role": "user", "content": prompt}])
+    if "<think>" in answer:
+        answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
+    answer = answer.strip()
+    if not disclaim:
+        return answer
+    return f"{_GENERAL_KNOWLEDGE_HEADER}{answer}{_GENERAL_KNOWLEDGE_FOOTER}"
 
 
 def generate(sections, question, provider="local"):

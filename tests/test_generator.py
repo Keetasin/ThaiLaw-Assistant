@@ -48,6 +48,17 @@ class ParseCitationTests(unittest.TestCase):
         clean, cited = parse_citation(answer, SECTIONS)
         self.assertEqual(cited, SECTIONS)  # no match in `sections` -> falls back to all
 
+    def test_trailer_without_brackets_is_still_stripped(self):
+        # real live-test miss: the model doesn't always follow the exact
+        # "[มาตรา X]" format asked for in the system prompt -- seen live as
+        # "ใช้ข้อมูลจาก: มาตรา 118" with no brackets at all, which used to
+        # leak straight into the user-visible answer since the old strict
+        # regex silently failed to match and strip it.
+        answer = "ลูกจ้างมีสิทธิได้รับค่าล่วงเวลา\nใช้ข้อมูลจาก: มาตรา 61"
+        clean, cited = parse_citation(answer, SECTIONS)
+        self.assertEqual(clean, "ลูกจ้างมีสิทธิได้รับค่าล่วงเวลา")
+        self.assertEqual([s["section_no"] for s in cited], ["61"])
+
 
 if __name__ == "__main__":
     unittest.main()

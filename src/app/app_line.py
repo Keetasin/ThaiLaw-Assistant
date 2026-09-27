@@ -25,7 +25,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from src import config
 from src.app import chat_history
 from src.app.engine import RAGEngine
-from src.app.flex import build_answer_flex
+from src.app.flex import build_answer_flex, clean_for_line
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -106,6 +106,8 @@ def _format_debug(debug):
     if debug.get("provider_fallback"):
         provider_line += " (fallback)"
     lines.append(provider_line)
+    if debug.get("general_knowledge"):
+        lines.append("general_knowledge=True (answered from LLM's own knowledge, not RAG context)")
     if debug.get("route"):
         r = debug["route"]
         lines.append(f'route={r["query_type"]} α(dense={r["alpha_dense"]}, bm25={r["alpha_bm25"]}, graph={r["alpha_graph"]})')
@@ -119,6 +121,16 @@ def _format_debug(debug):
     if latency:
         lines.append("latency(s): " + ", ".join(f"{k}={v:.2f}" for k, v in latency.items()))
     return "\n".join(lines)
+
+
+def _should_use_flex(debug):
+    """general_knowledge answers cite no verified section -- never build a
+    Flex card around debug["hits"] in that case, those are just the
+    (rejected, low-score) candidates retrieval happened to find, not real
+    citations. Split out from _work() so this decision is unit-testable
+    without a real LINE event/reply round-trip (same reasoning as
+    generator.parse_citation's own split)."""
+    return bool(debug["hits"]) and not debug.get("general_knowledge")
 
 
 def _reply(event, messages):
@@ -161,7 +173,7 @@ def _work(event):
         answer, debug = get_engine().answer_with_debug(
             text, session_id=user_id, provider=state["provider"], mode=state["mode"]
         )
-        reply = build_answer_flex(answer, debug["hits"]) if debug["hits"] else TextMessage(text=answer)
+        reply = build_answer_flex(answer, debug["hits"]) if _should_use_flex(debug) else TextMessage(text=clean_for_line(answer))
     except Exception:
         log.exception("answer generation failed")
         answer = "ขออภัย ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง"

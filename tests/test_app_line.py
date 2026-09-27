@@ -63,6 +63,19 @@ class HandleCommandTests(unittest.TestCase):
         self.assertEqual(reply, app_line.COMMAND_HELP)
 
 
+class ShouldUseFlexTests(unittest.TestCase):
+    def test_true_when_hits_present_and_not_general_knowledge(self):
+        self.assertTrue(app_line._should_use_flex({"hits": [{"section_no": "61"}], "general_knowledge": False}))
+
+    def test_false_when_no_hits(self):
+        self.assertFalse(app_line._should_use_flex({"hits": [], "general_knowledge": False}))
+
+    def test_false_for_general_knowledge_even_with_hits(self):
+        # the retrieved hits in this case are just rejected low-score
+        # candidates, not real citations for the disclaimed LLM answer
+        self.assertFalse(app_line._should_use_flex({"hits": [{"section_no": "61"}], "general_knowledge": True}))
+
+
 class FormatDebugTests(unittest.TestCase):
     def test_includes_mode_zone_score_and_route(self):
         debug = {
