@@ -18,7 +18,14 @@ DOTBLUE_MODEL = os.getenv("DOTBLUE_MODEL", "qwen/qwen3.6-flash")
 DOTBLUE_JUDGE_MODEL = os.getenv("DOTBLUE_JUDGE_MODEL", "qwen/qwen3.6-plus")
 DOTBLUE_FREE_MODEL = "PSU-LLM/psu-gemma"
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
-NUM_PREDICT = int(os.getenv("NUM_PREDICT", "512"))
+# 512 (the original default) made qwen3.6-flash's answers come back completely
+# empty on ~35% of real RAG queries in Day-4 eval: it consistently burns
+# ~1500-1800 completion tokens on hidden reasoning before the visible answer,
+# despite enable_thinking=False in DotBlueClient, and gets cut off mid-thought
+# at 512 with zero visible output. 2500 gives headroom above the observed
+# worst case; local Ollama models and other API models stop naturally well
+# before this cap, so raising it doesn't slow down calls that didn't need it.
+NUM_PREDICT = int(os.getenv("NUM_PREDICT", "2500"))
 NUM_CTX = int(os.getenv("NUM_CTX", "8192"))
 APP_PORT = int(os.getenv("APP_PORT", "5000"))
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -29,7 +36,7 @@ os.environ.setdefault("HF_HOME", str(ROOT_DIR / ".hf_cache"))
 os.environ.setdefault("HF_HUB_OFFLINE", "0")
 CHUNKS_PATH = os.getenv("CHUNKS_PATH", str(ROOT_DIR / "data" / "chunks.jsonl"))
 CHROMA_DIR = os.getenv("CHROMA_DIR", os.getenv("CHROMA_PERSIST_DIR", str(ROOT_DIR / "data" / "index" / "chroma")))
-BM25_PATH = os.getenv("BM25_PATH", str(ROOT_DIR / "data" / "index" / "bm25.pkl"))
+BM25_PATH = os.getenv("BM25_PATH", str(ROOT_DIR / "data" / "bm25.pkl"))
 SECTIONS_PATH = os.getenv("SECTIONS_PATH", str(ROOT_DIR / "data" / "sections.json"))
 GRAPH_PATH = os.getenv("GRAPH_PATH", str(ROOT_DIR / "data" / "graph.json"))
 TOPICS_PATH = os.getenv("TOPICS_PATH", str(ROOT_DIR / "data" / "curated" / "topic_agency_evidence_form_step.csv"))

@@ -52,9 +52,9 @@ class DotBlueClient:
     dotBlue from this SDK.
     """
 
-    def __init__(self, model=None):
+    def __init__(self, model=None, timeout=30.0):
         self.model = model or config.DOTBLUE_MODEL
-        self._client = OpenAI(base_url=config.DOTBLUE_BASE_URL, api_key=config.DOTBLUE_API_KEY, timeout=30.0)
+        self._client = OpenAI(base_url=config.DOTBLUE_BASE_URL, api_key=config.DOTBLUE_API_KEY, timeout=timeout)
 
     @retry(
         stop=stop_after_attempt(3),
