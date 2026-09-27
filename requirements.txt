@@ -15,3 +15,6 @@ openai
 ollama
 tenacity
 rank_bm25
+psutil
+nbconvert
+ipykernel

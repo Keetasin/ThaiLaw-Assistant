@@ -24,7 +24,7 @@ TESTSET = ROOT / "eval" / "testset.jsonl"
 TESTSET_A = ROOT / "eval" / "testset_a.jsonl"
 TOKEN_RE = re.compile(r"[\w๐-๙]+", re.UNICODE)
 SECTION_RE = re.compile(r"(?:มาตรา|section)\s*([0-9๐-๙]+(?:\s*/\s*[0-9๐-๙]+)?)", re.I)
-CONFIGS = ("D", "D+R", "G", "H1", "H2", "H3", "H4", "H5")
+CONFIGS = ("D", "D+R", "G", "H1", "H2", "H3", "H4", "H5", "H6")
 TUNING = {"top_k": (3, 5, 10), "threshold": (None, 0.4, 0.5), "rerank": (False, True), "chunking": ("per-section", "fixed-512")}
 
 
@@ -116,13 +116,41 @@ class Neo4jBackend(CorpusBackend):
         return sorted(unique.items(), key=lambda item: (-item[1], item[0]))[:limit]
 
 
+class RealGraphBackend(CorpusBackend):
+    """Wraps the actual production src.retrieval.graph.GraphRetriever (with
+    real topic aliases) instead of CorpusBackend's own regex-only
+    graph_search proxy, so this ablation's "G"/hybrid numbers reflect what
+    engine.py really does in production. Before this, the offline "G"
+    config here couldn't see the ABOUT-edge/alias fix at all (it's a
+    different, simpler graph_search than GraphRetriever's), so the ablation
+    table understated graph recall on every non-lookup category."""
+    def __init__(self, chunks: dict[str, dict]):
+        super().__init__(chunks)
+        from src.retrieval.graph import GraphRetriever, load_aliases
+        from src import config as app_config
+        aliases = load_aliases(app_config.TOPICS_PATH) if Path(app_config.TOPICS_PATH).exists() else {}
+        self.retriever_impl = GraphRetriever.from_json(GRAPH, aliases)
+        self._section_idx = defaultdict(list)
+        for cid, chunk in chunks.items():
+            self._section_idx[(chunk["law_id"], str(chunk["section_no"]))].append(cid)
+
+    def graph_search(self, query: str, limit: int = 10) -> list[tuple[str, float]]:
+        result = self.retriever_impl.search(query, top_k=limit)
+        scored = []
+        for rank, sec in enumerate(result.get("sections", [])):
+            key = (sec.get("law_id"), str(sec.get("section_no", "")))
+            for cid in self._section_idx.get(key, []):
+                scored.append((cid, 1.0 - rank / max(1, limit)))
+        return sorted(scored, key=lambda item: (-item[1], item[0]))[:limit]
+
+
 class ProductionBackend(CorpusBackend):
     """Chroma + BM25-capable dense retriever with optional live Neo4j graph."""
     def __init__(self, chunks: dict[str, dict], use_neo4j: bool = True):
         super().__init__(chunks)
         from src.retrieval.retriever import Retriever
         self.retriever = Retriever()
-        self.graph_backend = neo4j_backend(chunks) if use_neo4j else CorpusBackend(chunks, json.loads(GRAPH.read_text(encoding="utf-8")))
+        self.graph_backend = neo4j_backend(chunks) if use_neo4j else RealGraphBackend(chunks)
         self._rerank_cache = {}
         self._rerank_by_query = {}
         self._dense_cache = {}
@@ -201,6 +229,67 @@ def rrf(*ranked_lists: Iterable[tuple[str, float]], limit: int = 10, weights: It
     return sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:limit]
 
 
+_PENALTY_PARTNER_CACHE: dict[str, list[str]] | None = None
+
+
+def _penalty_partner_index(chunks: dict[str, dict]) -> dict[str, list[str]]:
+    """chunk_id -> PENALIZED_BY partner chunk_id(s), from data/graph.json --
+    mirrors src.retrieval.fusion.complete_penalty_partners's graph walk
+    (see doc/report.md §3.2 point 3 / §5.3), precomputed once here since this
+    ablation harness works with chunk_id/score tuples, not chunk dicts."""
+    global _PENALTY_PARTNER_CACHE
+    if _PENALTY_PARTNER_CACHE is not None:
+        return _PENALTY_PARTNER_CACHE
+    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+    nodes_by_id = {n["id"]: n for n in graph["nodes"]}
+    section_idx: dict[tuple, list[str]] = defaultdict(list)
+    for cid, chunk in chunks.items():
+        section_idx[(chunk.get("law_id"), str(chunk.get("section_no", "")))].append(cid)
+    partners: dict[str, list[str]] = defaultdict(list)
+    for edge in graph["edges"]:
+        if edge["type"] != "PENALIZED_BY":
+            continue
+        for a, b in ((edge["source"], edge["target"]), (edge["target"], edge["source"])):
+            node_a, node_b = nodes_by_id.get(a), nodes_by_id.get(b)
+            if not node_a or not node_b:
+                continue
+            key_a = (node_a.get("law_id"), str(node_a.get("section_no", "")))
+            key_b = (node_b.get("law_id"), str(node_b.get("section_no", "")))
+            for cid_a in section_idx.get(key_a, []):
+                partners[cid_a].extend(section_idx.get(key_b, []))
+    _PENALTY_PARTNER_CACHE = partners
+    return partners
+
+
+def _expand_with_partners(pool: list[tuple[str, float]], partner_index: dict[str, list[str]]) -> list[tuple[str, str]]:
+    """New (partner_id, seed_id) pairs not already in `pool`, one hop out via
+    PENALIZED_BY -- the H6 analog of graph_seeded_expand's pre-rerank step."""
+    present = {cid for cid, _ in pool}
+    added, seen_new = [], set()
+    for cid, _score in pool:
+        for partner in partner_index.get(cid, []):
+            if partner in present or partner in seen_new:
+                continue
+            added.append(partner)
+            seen_new.add(partner)
+    return added
+
+
+def _complete_penalty_partners(hits: list[tuple[str, float]], pool_ids: set[str], partner_index: dict[str, list[str]], max_add: int = 3) -> list[tuple[str, float]]:
+    """Post-rerank safety net: reinsert a PENALIZED_BY partner that `pool_ids`
+    had available but rerank's top-k cutoff dropped (doc/report.md §3.2
+    point 3 / §5.3's live-engine fix, mirrored here for the ablation)."""
+    present = {cid for cid, _ in hits}
+    result = list(hits); added = 0
+    for cid, _score in list(hits):
+        if added >= max_add: break
+        for partner in partner_index.get(cid, []):
+            if added >= max_add: break
+            if partner in present or partner not in pool_ids: continue
+            result.append((partner, 0.0)); present.add(partner); added += 1
+    return result
+
+
 def retrieve(row: dict, backend: CorpusBackend, config: str, top_k: int = 5, threshold: float | None = None, rerank: bool = False, chunking: str = "per-section") -> list[str]:
     dense = backend.dense(row["question"], max(10, top_k), threshold, chunking == "fixed-512")
     graph = backend.graph_search(row["question"], max(10, top_k)) if config not in ("D", "D+R") else []
@@ -212,12 +301,19 @@ def retrieve(row: dict, backend: CorpusBackend, config: str, top_k: int = 5, thr
     elif config == "H3": result = rrf(dense, graph + [(target, score * .8) for cid, score in dense for target in backend.edge_by_source.get(cid, [])])
     elif config == "H4": result = rrf(dense, graph, weights=(.4, .6))
     elif config == "H5": result = rrf(dense, graph, weights=(.4, .6))
+    elif config == "H6":
+        partner_index = _penalty_partner_index(backend.chunks)
+        new_partners = _expand_with_partners(dense + graph, partner_index)
+        result = rrf(dense, graph, [(cid, 1.0) for cid in new_partners], weights=(.4, .6, .3))
     else: raise ValueError(f"unknown config: {config}")
-    if rerank or config in ("D+R", "H5"):
+    if rerank or config in ("D+R", "H5", "H6"):
         if hasattr(backend, "rerank_results"):
             result = backend.rerank_results(row["question"], result, top_k)
         else:
             result = sorted(result, key=lambda item: (-item[1], item[0]))
+    if config == "H6":
+        pool_ids = {cid for cid, _ in dense} | {cid for cid, _ in graph} | set(new_partners)
+        result = _complete_penalty_partners(result, pool_ids, partner_index)
     return [cid for cid, _score in result[:top_k]]
 
 
@@ -261,15 +357,18 @@ def run_tuning(backend: CorpusBackend, rows: list[dict], output_dir: Path = RESU
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--tune", action="store_true"); parser.add_argument("--tune-only", action="store_true", help="run only dense tuning"); parser.add_argument("--neo4j", action="store_true", help="use Neo4j for graph retrieval"); parser.add_argument("--production", action="store_true", help="use Chroma/BM25 embeddings and reranker"); parser.add_argument("--output", type=Path, default=RESULTS); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument("--tune", action="store_true"); parser.add_argument("--tune-only", action="store_true", help="run only dense tuning"); parser.add_argument("--neo4j", action="store_true", help="use Neo4j for graph retrieval"); parser.add_argument("--production", action="store_true", help="use Chroma/BM25 embeddings and reranker"); parser.add_argument("--output", type=Path, default=RESULTS); parser.add_argument("--configs", default=None, help="comma-separated subset of CONFIGS, for a quick dev-loop check instead of all 8"); parser.add_argument("--category", default=None, help="limit testset rows to one gold category, for a quick dev-loop check"); args = parser.parse_args()
     chunks = load_chunks(); backend = ProductionBackend(chunks, args.neo4j) if args.production else (neo4j_backend(chunks) if args.neo4j else CorpusBackend(chunks, json.loads(GRAPH.read_text(encoding="utf-8")))); rows = load_rows()
+    if args.category:
+        rows = [r for r in rows if r["category"] == args.category]
+    configs = tuple(args.configs.split(",")) if args.configs else CONFIGS
     if args.neo4j:
         (backend.graph_backend if args.production else backend)._query("RETURN 1 AS ok", {})
     if args.production:
         backend.warm_dense(rows, tuning=(args.tune or args.tune_only))
         backend.release_embedder()
     if not args.tune_only:
-        run(backend, rows, output_dir=args.output)
+        run(backend, rows, configs=configs, output_dir=args.output)
     if args.tune or args.tune_only: run_tuning(backend, rows, args.output)
     mode = "production+Neo4j" if args.production and args.neo4j else "production" if args.production else "Neo4j" if args.neo4j else "offline"
     print(f"evaluated {len(rows)} questions with {mode} backend; results: {args.output}")

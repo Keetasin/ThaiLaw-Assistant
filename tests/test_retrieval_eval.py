@@ -24,7 +24,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
         rows = [{"id": "A-1", "category": "lookup", "question": "มาตรา 1 ว่าด้วยอะไร", "gold_sections": ["LPA-s1-p1"]}]
         with tempfile.TemporaryDirectory() as directory:
             result = run(self.backend, rows, output_dir=Path(directory))
-            self.assertEqual({row["config"] for row in result}, {"D", "D+R", "G", "H1", "H2", "H3", "H4", "H5"})
+            self.assertEqual({row["config"] for row in result}, {"D", "D+R", "G", "H1", "H2", "H3", "H4", "H5", "H6"})
             self.assertTrue((Path(directory) / "retrieval_H5.csv").exists())
 
     def test_tuning_covers_all_dimensions(self):
