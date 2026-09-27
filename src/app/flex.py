@@ -116,3 +116,29 @@ def build_answer_flex(answer_text, hits, alt_text=None):
     )
 
     return FlexMessage(alt_text=alt_text or body_text[:60], contents=bubble)
+
+def build_intro_flex():
+    """Tapping the rich menu's banner (setup_richmenu.py) sends a fixed
+    "สวัสดีครับ" greeting (app_line.py intercepts it before the RAG engine)
+    -- this is the reply: what the bot answers, not an answer card, so it
+    skips the มาตรา/citation sections entirely."""
+    body_text = (
+        "แชทนี้คือผู้ช่วยตอบคำถามเกี่ยวกับ พ.ร.บ.คุ้มครองแรงงาน พ.ศ. 2541\n"
+        "ถามเกี่ยวกับสิทธิลูกจ้าง/นายจ้างได้เลย"
+    )
+
+    bubble = FlexBubble(
+        header=FlexBox(
+            layout="vertical",
+            background_color=_HEADER_BG,
+            padding_all="lg",
+            contents=[FlexText(text="⚖️ ผู้ช่วยกฎหมายแรงงาน", weight="bold", size="md", color="#FFFFFF")],
+        ),
+        body=FlexBox(
+            layout="vertical",
+            background_color=_BODY_BG,
+            spacing="sm",
+            contents=[FlexText(text=clean_for_line(body_text), wrap=True, size="md")],
+        ),
+    )
+    return FlexMessage(alt_text="แนะนำการใช้งาน", contents=bubble)

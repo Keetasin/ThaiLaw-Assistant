@@ -1,6 +1,6 @@
 import unittest
 
-from src.app.flex import _insert_word_breaks, _strip_markdown, build_answer_flex
+from src.app.flex import _insert_word_breaks, _strip_markdown, build_answer_flex, build_intro_flex
 
 _ZWSP = "​"
 
@@ -95,6 +95,19 @@ class BuildAnswerFlexTests(unittest.TestCase):
     def test_footer_background_matches_body(self):
         msg = build_answer_flex("คำตอบ", [hit()])
         self.assertEqual(msg.contents.footer.background_color, msg.contents.body.background_color)
+
+
+class BuildIntroFlexTests(unittest.TestCase):
+    def test_has_branded_header_and_intro_text(self):
+        msg = build_intro_flex()
+        header_texts = _collect_text(msg.contents.header)
+        self.assertTrue(any("ผู้ช่วยกฎหมายแรงงาน" in t for t in header_texts))
+        body_text = "".join(_collect_text(msg.contents.body)).replace(_ZWSP, "")
+        self.assertIn("คุ้มครองแรงงาน", body_text)
+
+    def test_has_no_footer(self):
+        msg = build_intro_flex()
+        self.assertIsNone(msg.contents.footer)
 
     def test_button_is_a_filled_primary_button_not_a_plain_link(self):
         msg = build_answer_flex("คำตอบ", [hit()])

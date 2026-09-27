@@ -99,6 +99,13 @@ python -m src.app.app_line
 - `/llm local|api` — สลับ local Ollama / dotBlue API
 - `/debug` — โชว์ route, top sections+scores, graph path, latency ต่อ stage, tokens
 - `/reset` — ล้างประวัติสนทนา
+- `/intro` — การ์ดแนะนำการใช้งาน (ตัวอย่างคำถาม) — ปกติผู้ใช้กดจาก rich menu ไม่ต้องพิมพ์เอง
+
+**Rich Menu** (พิมพ์ครั้งเดียวตอน deploy, ตั้ง default ให้ผู้ใช้ทุกคนทันที):
+```bash
+python -m src.app.setup_richmenu           # แค่ build รูป src/app/assets/richmenu.jpg ดูก่อน (resize จาก richmenu_reference.png)
+python -m src.app.setup_richmenu --upload  # สร้าง+อัปโหลด+ตั้งเป็น default บน LINE จริง
+```
 
 ---
 
@@ -144,14 +151,14 @@ node.ChatMessage{ color: #495057; border-color: #343A40; text-color-internal: #F
 ```bash
 python -m unittest discover -s tests
 ```
-91 test cases ครอบคลุม parser/chunker/graph build, retrieval (dense/BM25/graph/fusion/rerank), engine (rewrite/zone/concurrency), generator (context/citation), tracing, app_line command handling. `test_retrieval_integration.py`'s "มาตรา 61 คืออะไร" case เป็น `@unittest.expectedFailure` ที่ตั้งใจไว้ (documented known gap ของ dense-only ต่อ query แบบเลขมาตราล้วน — hybrid mode แก้ปัญหานี้แล้ว ดู `doc/report.md`)
+122 test cases ครอบคลุม parser/chunker/graph build, retrieval (dense/BM25/graph/fusion/rerank), engine (rewrite/zone/concurrency/safety-net/degenerate-answer), generator (context/citation), Flex card (markdown-strip/word-wrap), tracing, app_line command handling. `test_retrieval_integration.py`'s "มาตรา 61 คืออะไร" case เป็น `@unittest.expectedFailure` ที่ตั้งใจไว้ (documented known gap ของ dense-only ต่อ query แบบเลขมาตราล้วน — hybrid mode แก้ปัญหานี้แล้ว ดู `doc/report.md`)
 
 ---
 
 ## 6. Evaluation (Day 4-5 experiments)
 
 ```bash
-# Retrieval ablation 8 configs (D, D+R, G, H1-H5) + dense tuning (top-k/threshold/rerank/chunking)
+# Retrieval ablation 9 configs (D, D+R, G, H1-H6) + dense tuning (top-k/threshold/rerank/chunking)
 python -m eval.run_retrieval --production --tune
 
 # Generation eval: Local vs API matrix + num_ctx sweep + no-RAG/full-context baselines

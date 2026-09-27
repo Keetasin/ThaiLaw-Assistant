@@ -25,7 +25,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from src import config
 from src.app import chat_history
 from src.app.engine import RAGEngine
-from src.app.flex import build_answer_flex, clean_for_line
+from src.app.flex import build_answer_flex, build_intro_flex, clean_for_line
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -162,6 +162,17 @@ def on_message(event):
 def _work(event):
     user_id = event.source.user_id
     text = event.message.text
+
+    if text.strip() == "สวัสดีครับ":
+        # Rich menu's banner tile (setup_richmenu.py) sends this fixed
+        # greeting -- reads naturally in the chat log (unlike a literal
+        # "/intro" command) but still replies with the fixed "what this bot
+        # does + example questions" card, skipping _handle_command/the RAG
+        # engine entirely. A real user typing the same greeting gets the
+        # same helpful card instead of a generic direct_llm reply -- an
+        # improvement, not a regression.
+        _reply(event, [build_intro_flex()])
+        return
 
     command_reply = _handle_command(user_id, text)
     if command_reply is not None:

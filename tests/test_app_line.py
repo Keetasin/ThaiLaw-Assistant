@@ -63,6 +63,25 @@ class HandleCommandTests(unittest.TestCase):
         self.assertEqual(reply, app_line.COMMAND_HELP)
 
 
+class WorkInterceptsIntroTests(unittest.TestCase):
+    @patch("src.app.app_line.get_engine")
+    @patch("src.app.app_line._reply")
+    @patch("src.app.app_line.build_intro_flex", return_value="INTRO_FLEX")
+    def test_intro_message_replies_with_intro_flex_without_touching_engine(self, mock_build_intro, mock_reply, mock_get_engine):
+        # rich menu's banner tile (setup_richmenu.py) sends this fixed
+        # greeting -- must short-circuit before _handle_command/the RAG
+        # engine, since it's not a real question.
+        event = MagicMock()
+        event.source.user_id = "u1"
+        event.message.text = "สวัสดีครับ"
+
+        app_line._work(event)
+
+        mock_build_intro.assert_called_once()
+        mock_reply.assert_called_once_with(event, ["INTRO_FLEX"])
+        mock_get_engine.assert_not_called()
+
+
 class ShouldUseFlexTests(unittest.TestCase):
     def test_true_when_hits_present_and_not_general_knowledge(self):
         self.assertTrue(app_line._should_use_flex({"hits": [{"section_no": "61"}], "general_knowledge": False}))
