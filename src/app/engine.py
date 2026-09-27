@@ -20,14 +20,15 @@ import logging
 import re
 import threading
 import time
+from collections import Counter
 
 from src import config
-from src.app.generator import generate, generate_from_cards
+from src.app.generator import generate, generate_from_cards, generate_general_knowledge
 from src.app.tracing import log_trace
 from src.llm.client import get_llm
 from src.retrieval.context import build_section_cards
-from src.retrieval.fusion import graph_seeded_expand, hybrid_search
-from src.retrieval.graph import GraphRetriever, load_aliases
+from src.retrieval.fusion import complete_penalty_partners, ensure_graph_hits_survive, graph_seeded_expand, hybrid_search
+from src.retrieval.graph import GraphRetriever, infer_query_type, load_aliases
 from src.retrieval.reranker import rerank
 from src.retrieval.retriever import Retriever, dynamic_k
 from src.retrieval.router import RouteDecision, classify_query
@@ -48,6 +49,34 @@ _INVISIBLE_CHARS = re.compile("[​‌‍‎‏﻿]")
 
 def clean_query(q):
     return _INVISIBLE_CHARS.sub("", q).strip()
+
+
+def _is_empty_body(answer):
+    """generator.py always appends "\n\nที่มา: ..." after the real answer
+    body -- if that's ALL there is (body blank before it), the LLM produced
+    no visible content at all (see _generate_with_fallback's docstring)."""
+    body = answer.split("\n\nที่มา:", 1)[0]
+    return not body.strip()
+
+
+def _is_degenerate_body(answer):
+    """qwen3.6-flash occasionally loops the question back verbatim dozens
+    of times (sometimes even leaking meta-commentary like "Wait, I'm
+    generating garbage...") before eventually recovering into a real
+    answer at the very end -- a non-empty wall of repeated text that
+    _is_empty_body can't catch, but is just as useless to a real user.
+    Detect gross repetition: several lines, and the single most-repeated
+    non-blank line makes up more than a third of them."""
+    body = answer.split("\n\nที่มา:", 1)[0]
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if len(lines) < 6:
+        return False
+    _, count = Counter(lines).most_common(1)[0]
+    return count / len(lines) > 0.3
+
+
+def _is_bad_body(answer):
+    return _is_empty_body(answer) or _is_degenerate_body(answer)
 
 
 NORMALIZE_PROMPT = """แก้เฉพาะคำสะกดผิดในประโยคนี้ ตอบกลับเป็นประโยคเดียว ไม่ต้องอธิบาย
@@ -166,6 +195,15 @@ class RAGEngine:
         graph snapshot is unavailable, instead of a separate code path."""
         route = classify_query(q) if mode == "hybrid" else GRAPH_ONLY_ROUTE
         rerank_k, fuse_k = dynamic_k(q)
+        if infer_query_type(q) == "aggregation":
+            # "ลาประเภทใดบ้าง"-style queries are often short (dynamic_k reads
+            # that as "simple, few candidates needed") but actually need
+            # many distinct sections across several topics -- the same
+            # top_k=5 truncation bug fixed in GraphRetriever.search() for
+            # the graph leg (doc/report.md §3.5) also applies here to the
+            # final fused/reranked window, via router.classify_query's
+            # separate "general" route type never covering this case.
+            rerank_k, fuse_k = max(rerank_k, 10), max(fuse_k, 15)
 
         t0 = time.time()
         cands = hybrid_search(self.retriever, self.graph_retriever, q, route, fuse_k=fuse_k)
@@ -176,6 +214,22 @@ class RAGEngine:
             graph_paths = []
         t2 = time.time()
         hits, score = rerank(q, cands, k=rerank_k)
+        if self.graph_retriever is not None:
+            # multi-hop content+penalty pairs: rerank alone tends to drop
+            # one half (doc/report.md §3.2 point 3) -- widens context only,
+            # doesn't touch `score`.
+            hits = complete_penalty_partners(hits, cands, self.graph_retriever.graph)
+            # A confident (exact section/alias, not fuzzy) graph match found
+            # by ensure_graph_hits_survive means this query IS answerable
+            # from our corpus even if raw rerank score is low -- bump score
+            # to TAU_ANSWER so the zone gate doesn't throw away a correct
+            # grounded answer and misroute to general_knowledge (real
+            # live-test miss: "ต้องใช้หลักฐานอะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย"
+            # had graph correctly find มาตรา 123 in hits, but the untouched
+            # rerank score still fell below TAU_REJECT).
+            hits, graph_confirmed = ensure_graph_hits_survive(hits, self.retriever, self.graph_retriever, q)
+            if graph_confirmed and score < config.TAU_ANSWER:
+                score = config.TAU_ANSWER
         t3 = time.time()
         if timing is not None:
             timing["retrieve"] = timing.get("retrieve", 0.0) + (t1 - t0)
@@ -213,13 +267,52 @@ class RAGEngine:
         API ถ้า Ollama ล่ม)": one retry against the other provider, at this
         call site (not inside src/llm/client.py) so the fallback stays
         visible in the timing/debug capture below. Returns
-        (answer, provider_actually_used)."""
+        (answer, provider_actually_used).
+
+        Also retries on a *bad* answer body, not just a raised exception --
+        two distinct qwen3.6-flash (dotBlue) failure modes, neither of
+        which raises: (1) empty -- burns its whole completion-token budget
+        on hidden reasoning, returns a 200 OK with zero visible text before
+        the citation trailer (doc/report.md §4.0; config.NUM_PREDICT=2500
+        fixed most of this but ~6-9% still slips through empty), and (2)
+        degenerate -- loops the question back verbatim dozens of times
+        (occasionally even leaking meta-commentary about its own looping)
+        before recovering into a real answer at the very end, a non-empty
+        wall of repeated text that's just as useless to a real user. Both
+        are real, silent answer failures the old exception-only fallback
+        never caught."""
+        fallback_provider = "local" if provider == "api" else "api"
         try:
-            return self._generate(hits, q_used, provider, mode), provider
+            out = self._generate(hits, q_used, provider, mode)
+            if not _is_bad_body(out):
+                return out, provider
+            log.warning("generate() returned an empty/degenerate body on provider=%s, retrying with %s", provider, fallback_provider)
         except Exception:
-            fallback_provider = "local" if provider == "api" else "api"
             log.warning("generate() failed on provider=%s, falling back to %s", provider, fallback_provider, exc_info=True)
-            return self._generate(hits, q_used, fallback_provider, mode), fallback_provider
+        return self._generate(hits, q_used, fallback_provider, mode), fallback_provider
+
+    def _general_knowledge_with_fallback(self, q_used, provider):
+        """Out-of-scope answer (zone reject/reject-after-retry): LLM's own
+        knowledge, clearly disclaimed (generator.generate_general_knowledge),
+        not a flat refusal. Same provider-swap fallback as
+        _generate_with_fallback; if BOTH providers fail, degrade to the old
+        static refusal rather than surface an error to the user.
+
+        A greeting/thanks ("direct_llm" route) skips the disclaimer banner
+        -- see generate_general_knowledge's docstring."""
+        disclaim = classify_query(q_used).query_type != "direct_llm"
+        fallback_provider = "local" if provider == "api" else "api"
+        try:
+            out = generate_general_knowledge(q_used, provider=provider, disclaim=disclaim)
+            if not _is_bad_body(out):
+                return out, provider, True
+        except Exception:
+            log.warning("generate_general_knowledge() failed on provider=%s, falling back to %s", provider, fallback_provider, exc_info=True)
+        try:
+            return generate_general_knowledge(q_used, provider=fallback_provider, disclaim=disclaim), fallback_provider, True
+        except Exception:
+            log.warning("generate_general_knowledge() failed on both providers, degrading to static refusal", exc_info=True)
+            return "ไม่พบข้อมูลนี้ในตัวบทกฎหมายที่มี กรุณาปรึกษาทนายความหรือหน่วยงานที่เกี่ยวข้อง", provider, False
 
     def answer(self, q, session_id="default", provider="local", mode="hybrid"):
         text, _debug = self.answer_with_debug(q, session_id, provider=provider, mode=mode)
@@ -241,11 +334,12 @@ class RAGEngine:
         q_used = q_std
         zone = "answer"
         provider_used = provider
+        general_knowledge = False
 
-        t_gen0 = None
+        t_gen0 = time.time()
         if score < config.TAU_REJECT:
-            out = "ไม่พบข้อมูลนี้ในตัวบทกฎหมายที่มี กรุณาปรึกษาทนายความหรือหน่วยงานที่เกี่ยวข้อง"
-            zone = "reject"
+            out, provider_used, general_knowledge = self._general_knowledge_with_fallback(q_used, provider)
+            zone = "general_knowledge"
         elif score < config.TAU_ANSWER:
             zone = "borderline"
             q2 = llm_normalize(q_std, provider=provider)
@@ -258,15 +352,13 @@ class RAGEngine:
                 if score2 > score:
                     hits, score, q_used, route, graph_paths = hits2, score2, q2, route2, graph_paths2
             if score < config.TAU_ANSWER:
-                out = "ไม่พบข้อมูลนี้ในตัวบทกฎหมายที่มี กรุณาปรึกษาทนายความหรือหน่วยงานที่เกี่ยวข้อง"
-                zone = "reject-after-retry"
+                out, provider_used, general_knowledge = self._general_knowledge_with_fallback(q_used, provider)
+                zone = "general_knowledge-after-retry"
             else:
-                t_gen0 = time.time()
                 out, provider_used = self._generate_with_fallback(hits, q_used, provider, mode)
         else:
-            t_gen0 = time.time()
             out, provider_used = self._generate_with_fallback(hits, q_used, provider, mode)
-        timing["generate"] = (time.time() - t_gen0) if t_gen0 is not None else 0.0
+        timing["generate"] = time.time() - t_gen0
         timing["total"] = time.time() - t_start
 
         self._append_history(session_id, q, out)
@@ -283,6 +375,7 @@ class RAGEngine:
             "latency": timing,
             "provider": provider_used,
             "provider_fallback": provider_used != provider,
+            "general_knowledge": general_knowledge,
         }
         try:
             log_trace(

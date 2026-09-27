@@ -1,6 +1,6 @@
 import unittest
 
-from src.retrieval.fusion import graph_seeded_expand, hybrid_search
+from src.retrieval.fusion import complete_penalty_partners, ensure_graph_hits_survive, graph_seeded_expand, hybrid_search
 from src.retrieval.router import RouteDecision
 
 
@@ -102,6 +102,80 @@ class GraphSeededExpandTests(unittest.TestCase):
         # DEFINES edge from Section:LAW:1 must not pull in the Term node as a "chunk"
         expanded, _paths = graph_seeded_expand([CHUNKS["c1"]], GRAPH, retriever)
         self.assertTrue(all("chunk_id" in h for h in expanded))
+
+
+PENALTY_GRAPH = {
+    "nodes": [
+        {"id": "Section:LAW:23", "label": "Section", "law_id": "LAW", "section_no": "23"},
+        {"id": "Section:LAW:144", "label": "Section", "law_id": "LAW", "section_no": "144"},
+        {"id": "Section:LAW:99", "label": "Section", "law_id": "LAW", "section_no": "99"},
+    ],
+    "edges": [
+        {"source": "Section:LAW:23", "type": "PENALIZED_BY", "target": "Section:LAW:144"},
+    ],
+}
+
+
+class CompletePenaltyPartnersTests(unittest.TestCase):
+    def test_reinserts_content_section_dropped_by_rerank(self):
+        # doc/report.md §3.2 point 3: rerank kept the penalty section (144)
+        # but dropped its content-section partner (23), even though 23 was
+        # in the pre-rerank pool -- this must recover it.
+        hits = [chunk("c144", "144")]
+        pool = [chunk("c144", "144"), chunk("c23", "23")]
+        result = complete_penalty_partners(hits, pool, PENALTY_GRAPH)
+        self.assertEqual({h["section_no"] for h in result}, {"144", "23"})
+
+    def test_does_not_add_a_partner_absent_from_the_pool(self):
+        hits = [chunk("c144", "144")]
+        pool = [chunk("c144", "144")]  # 23 never retrieved at all
+        result = complete_penalty_partners(hits, pool, PENALTY_GRAPH)
+        self.assertEqual({h["section_no"] for h in result}, {"144"})
+
+    def test_noop_when_partner_already_present(self):
+        hits = [chunk("c144", "144"), chunk("c23", "23")]
+        pool = list(hits)
+        result = complete_penalty_partners(hits, pool, PENALTY_GRAPH)
+        self.assertEqual(len(result), 2)
+
+    def test_respects_max_add(self):
+        hits = [chunk("c144", "144")]
+        pool = [chunk("c144", "144"), chunk("c23", "23")]
+        result = complete_penalty_partners(hits, pool, PENALTY_GRAPH, max_add=0)
+        self.assertEqual(len(result), 1)
+
+
+class EnsureGraphHitsSurviveTests(unittest.TestCase):
+    def test_reinserts_a_direct_graph_match_rerank_dropped(self):
+        # doc/report.md §3.4: rerank re-scores by text similarity alone, so a
+        # section GraphRetriever confidently linked (exact topic/section
+        # match, not fuzzy) can still get cut by the top-k window -- this
+        # must recover it.
+        retriever = _StubRetriever(CHUNKS, [], [], [])
+        graph_retriever = _StubGraphRetriever([{"law_id": "LAW", "section_no": "3"}])
+        result, added = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q")
+        self.assertEqual({h["chunk_id"] for h in result}, {"c1", "c3"})
+        self.assertEqual(added, 1)
+
+    def test_noop_when_graph_retriever_is_none(self):
+        retriever = _StubRetriever(CHUNKS, [], [], [])
+        result, added = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, None, "q")
+        self.assertEqual(result, [CHUNKS["c1"]])
+        self.assertEqual(added, 0)
+
+    def test_noop_when_already_present(self):
+        retriever = _StubRetriever(CHUNKS, [], [], [])
+        graph_retriever = _StubGraphRetriever([{"law_id": "LAW", "section_no": "1"}])
+        result, added = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q")
+        self.assertEqual([h["chunk_id"] for h in result], ["c1"])
+        self.assertEqual(added, 0)
+
+    def test_respects_max_add(self):
+        retriever = _StubRetriever(CHUNKS, [], [], [])
+        graph_retriever = _StubGraphRetriever([{"law_id": "LAW", "section_no": "2"}, {"law_id": "LAW", "section_no": "3"}])
+        result, added = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q", max_add=1)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(added, 1)
 
 
 if __name__ == "__main__":

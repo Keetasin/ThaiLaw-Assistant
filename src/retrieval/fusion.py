@@ -100,3 +100,93 @@ def graph_seeded_expand(hits, graph, retriever, seed_n=3, max_new=5):
                 paths.append({"from": section_node_id, "type": edge["type"], "to": neighbor_id})
 
     return expanded, paths
+
+
+def ensure_graph_hits_survive(hits, retriever, graph_retriever, query, max_add=2):
+    """Safety net for rerank dropping a direct graph match entirely
+    (doc/report.md §3.4: rerank re-scores by text similarity alone and
+    ignores fusion weight, so a low-graph-weight "general" route doesn't
+    help once a candidate IS in the pool -- the real problem is rerank
+    sometimes drops a graph-confirmed section from the pool's top-k
+    altogether). GraphRetriever.search() is a fast, cheap, high-precision
+    lookup (exact section-number/topic-alias linking, not fuzzy semantic
+    guessing) -- if it names a section final rerank left out, add it back.
+    Same append-only pattern as complete_penalty_partners, generalized to
+    any graph-linked section rather than just PENALIZED_BY partners.
+
+    Returns (hits, added) -- `added` (count of newly-appended sections) lets
+    the caller know a *confident* (exact section-number/topic-alias, not
+    fuzzy semantic) graph match exists for this query even when the raw
+    rerank score is low, so the zone gate (TAU_REJECT/TAU_ANSWER) doesn't
+    have to rely on rerank score alone (doc/report.md: a real live-test case
+    -- "ต้องใช้หลักฐานอะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย" -- had graph
+    correctly find มาตรา 123 in `hits`, but the untouched rerank score still
+    fell below TAU_REJECT, so the whole query got routed to
+    general_knowledge and the correct grounded answer was thrown away)."""
+    if graph_retriever is None:
+        return hits, 0
+    found = graph_retriever.search(query, top_k=max_add + 1)
+    section_idx = _section_to_chunk_ids(retriever)
+    present = {(h["law_id"], str(h["section_no"])) for h in hits}
+    out = list(hits)
+    added = 0
+    for sec in found.get("sections", []):
+        if added >= max_add:
+            break
+        key = (sec.get("law_id"), str(sec.get("section_no", "")))
+        if not key[0] or key in present:
+            continue
+        for cid in section_idx.get(key, []):
+            if cid not in retriever.chunks:
+                continue
+            out.append(retriever.chunks[cid])
+            present.add(key)
+            added += 1
+            break
+    return out, added
+
+
+def complete_penalty_partners(hits, pool, graph, max_add=3):
+    """After rerank, reinsert a PENALIZED_BY partner that was retrieved in
+    the wider pre-rerank `pool` but got pushed out of `hits` by the top-k
+    cutoff (doc/report.md §3.2 point 3: bge-reranker-v2-m3 scores a penalty
+    section like "ผู้ใดฝ่าฝืนมาตรา 61..." as less query-similar than the
+    content section it penalizes, so cross-encoder rerank alone tends to
+    drop one half of a multi-hop content+penalty pair even when both were
+    correctly retrieved beforehand). Only looks at sections already in
+    `pool` — never invents a candidate rerank never saw."""
+    nodes_by_id = {n["id"]: n for n in graph.get("nodes", [])}
+    pool_by_key = {(c["law_id"], str(c["section_no"])): c for c in pool}
+    present_keys = {(h["law_id"], str(h["section_no"])) for h in hits}
+
+    result = list(hits)
+    added = 0
+    for hit in hits:
+        if added >= max_add:
+            break
+        section_node_id = f'Section:{hit["law_id"]}:{hit["section_no"]}'
+        for edge in graph.get("edges", []):
+            if added >= max_add:
+                break
+            if edge["type"] != "PENALIZED_BY":
+                continue
+            if edge["source"] == section_node_id:
+                partner_id = edge["target"]
+            elif edge["target"] == section_node_id:
+                partner_id = edge["source"]
+            else:
+                continue
+            partner_node = nodes_by_id.get(partner_id)
+            if not partner_node or partner_node.get("label") != "Section":
+                continue
+            key = (partner_node.get("law_id"), str(partner_node.get("section_no", "")))
+            if key in present_keys:
+                continue
+            partner_chunk = pool_by_key.get(key)
+            if partner_chunk is None:
+                continue
+            result.append(partner_chunk)
+            present_keys.add(key)
+            added += 1
+
+    return result

@@ -19,6 +19,8 @@ def make_engine():
 
 
 class _StubRetriever:
+    chunks: dict = {}  # ensure_graph_hits_survive's _section_to_chunk_ids reads this
+
     def search(self, q, fuse_k=None):
         return (["stub_candidate"], 0.5)
 
@@ -109,15 +111,21 @@ class AnswerWithDebugZoneTests(unittest.TestCase):
         self.assertIsNone(debug["route"])
         mock_generate.assert_called_once()
 
+    @patch("src.app.engine.generate_general_knowledge", return_value="DISCLAIMED GENERAL-KNOWLEDGE ANSWER")
     @patch("src.app.engine.generate")
     @patch("src.app.engine.rerank")
     @patch("src.app.engine.dynamic_k", return_value=(3, 4))
-    def test_low_score_rejects_without_calling_generate(self, _dk, mock_rerank, mock_generate):
+    def test_low_score_answers_from_llm_general_knowledge_not_rag(self, _dk, mock_rerank, mock_generate, mock_general):
+        # Out-of-scope no longer means a flat refusal (doc/report.md's
+        # out-of-scope design change): the LLM answers from its own
+        # knowledge, clearly disclaimed, instead of the RAG generate() path.
         mock_rerank.return_value = ([hit()], config.TAU_REJECT - 0.01)
         out, debug = self.engine.answer_with_debug("อากาศวันนี้เป็นอย่างไร", mode="dense")
-        self.assertEqual(debug["zone"], "reject")
-        self.assertIn("ไม่พบข้อมูล", out)
-        mock_generate.assert_not_called()
+        self.assertEqual(debug["zone"], "general_knowledge")
+        self.assertEqual(out, "DISCLAIMED GENERAL-KNOWLEDGE ANSWER")
+        self.assertTrue(debug["general_knowledge"])
+        mock_generate.assert_not_called()  # never the RAG-grounded generate()
+        mock_general.assert_called_once()
 
     @patch("src.app.engine.llm_normalize")
     @patch("src.app.engine.generate", return_value="GENERATED ANSWER")
@@ -138,18 +146,33 @@ class AnswerWithDebugZoneTests(unittest.TestCase):
         self.assertEqual(out, "GENERATED ANSWER")
         self.assertEqual(debug["hits"][0]["section_no"], "61")
 
+    @patch("src.app.engine.generate_general_knowledge", return_value="DISCLAIMED GENERAL-KNOWLEDGE ANSWER")
     @patch("src.app.engine.llm_normalize")
     @patch("src.app.engine.generate")
     @patch("src.app.engine.rerank")
     @patch("src.app.engine.dynamic_k", return_value=(3, 4))
-    def test_borderline_score_that_does_not_improve_rejects(self, _dk, mock_rerank, mock_generate, mock_normalize):
+    def test_borderline_score_that_does_not_improve_answers_from_general_knowledge(self, _dk, mock_rerank, mock_generate, mock_normalize, mock_general):
         borderline_score = (config.TAU_REJECT + config.TAU_ANSWER) / 2
         mock_rerank.return_value = ([hit()], borderline_score)  # same score every call
         mock_normalize.return_value = "same query rewritten"
         out, debug = self.engine.answer_with_debug("มาตรา 61 คืออาลย", mode="dense")
-        self.assertEqual(debug["zone"], "reject-after-retry")
-        self.assertIn("ไม่พบข้อมูล", out)
+        self.assertEqual(debug["zone"], "general_knowledge-after-retry")
+        self.assertEqual(out, "DISCLAIMED GENERAL-KNOWLEDGE ANSWER")
+        self.assertTrue(debug["general_knowledge"])
         mock_generate.assert_not_called()
+        mock_general.assert_called_once()
+
+    @patch("src.app.engine.generate_general_knowledge")
+    @patch("src.app.engine.llm_normalize")
+    @patch("src.app.engine.generate")
+    @patch("src.app.engine.rerank")
+    @patch("src.app.engine.dynamic_k", return_value=(3, 4))
+    def test_general_knowledge_degrades_to_static_refusal_if_both_providers_fail(self, _dk, mock_rerank, mock_generate, mock_normalize, mock_general):
+        mock_rerank.return_value = ([hit()], config.TAU_REJECT - 0.01)
+        mock_general.side_effect = ConnectionError("both providers down")
+        out, debug = self.engine.answer_with_debug("อากาศวันนี้เป็นอย่างไร", mode="dense")
+        self.assertIn("ไม่พบข้อมูล", out)
+        self.assertFalse(debug["general_knowledge"])
 
 
 ROUTE_STUB = RouteDecision(query_type="lookup", alpha_dense=0.2, alpha_bm25=0.4, alpha_graph=0.4)
@@ -160,8 +183,11 @@ class AnswerWithDebugHybridModeTests(unittest.TestCase):
         self.engine = make_engine()
         # non-None so `_generate`'s `self.graph_retriever.graph` access and
         # the `graph_seeded_expand` call both go through; the "missing
-        # graph retriever" test below overrides this back to None.
-        self.engine.graph_retriever = SimpleNamespace(graph={"nodes": [], "edges": []})
+        # graph retriever" test below overrides this back to None. `search`
+        # backs `ensure_graph_hits_survive`'s safety-net lookup (doc/report.md
+        # §3.4) -- empty result means it's a no-op here, same as a real
+        # GraphRetriever over an empty graph would return.
+        self.engine.graph_retriever = SimpleNamespace(graph={"nodes": [], "edges": []}, search=lambda *a, **k: {"sections": []})
 
     @patch("src.app.engine.generate_from_cards", return_value="HYBRID ANSWER")
     @patch("src.app.engine.build_section_cards", return_value=["CARD"])
@@ -227,6 +253,39 @@ class AnswerWithDebugHybridModeTests(unittest.TestCase):
         self.assertEqual(debug["graph_paths"], [])
         _expand.assert_not_called()  # never called at all when graph_retriever is None
 
+    @patch("src.app.engine.generate_general_knowledge", return_value="SHOULD NOT BE USED")
+    @patch("src.app.engine.generate_from_cards", return_value="GROUNDED ANSWER")
+    @patch("src.app.engine.build_section_cards", return_value=["CARD"])
+    @patch("src.app.engine.rerank")
+    @patch("src.app.engine.graph_seeded_expand")
+    @patch("src.app.engine.hybrid_search")
+    @patch("src.app.engine.classify_query", return_value=ROUTE_STUB)
+    @patch("src.app.engine.dynamic_k", return_value=(3, 4))
+    def test_confident_graph_match_prevents_misrouting_to_general_knowledge(
+        self, _dk, _classify, mock_hybrid_search, mock_expand, mock_rerank, _cards, _gen, mock_general
+    ):
+        # Real live-test miss (doc/report.md): "ต้องใช้หลักฐานอะไรเมื่อร้อง
+        # เรียนค่าจ้างค้างจ่าย" had GraphRetriever correctly find มาตรา 123,
+        # but rerank's untouched top-1 score fell below TAU_REJECT, so the
+        # whole query got routed to general_knowledge and the correct
+        # grounded answer was thrown away. ensure_graph_hits_survive finding
+        # a confident match must bump score past the gate instead.
+        mock_hybrid_search.return_value = ["cand"]
+        mock_expand.return_value = ([hit()], [])
+        mock_rerank.return_value = ([hit()], config.TAU_REJECT - 0.01)  # would reject on its own
+        self.engine.graph_retriever = SimpleNamespace(
+            graph={"nodes": [], "edges": []},
+            search=lambda *a, **k: {"sections": [{"law_id": hit()["law_id"], "section_no": "999"}]},
+        )
+        self.engine.retriever.chunks = {"extra": {**hit(), "chunk_id": "extra", "section_no": "999"}}
+
+        out, debug = self.engine.answer_with_debug("ต้องใช้หลักฐานอะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย", mode="hybrid")
+
+        self.assertEqual(debug["zone"], "answer")
+        self.assertFalse(debug["general_knowledge"])
+        self.assertEqual(out, "GROUNDED ANSWER")
+        mock_general.assert_not_called()
+
 
 class LLMFallbackTests(unittest.TestCase):
     def setUp(self):
@@ -258,6 +317,41 @@ class LLMFallbackTests(unittest.TestCase):
         self.assertEqual(debug["provider"], "local")
         self.assertFalse(debug["provider_fallback"])
         mock_generate.assert_called_once()
+
+    @patch("src.app.engine.generate")
+    @patch("src.app.engine.rerank")
+    @patch("src.app.engine.dynamic_k", return_value=(3, 4))
+    def test_retries_other_provider_on_empty_body_not_just_exceptions(self, _dk, mock_rerank, mock_generate):
+        # qwen3.6-flash's real failure mode (doc/report.md §4.0): a 200 OK
+        # with nothing but the citation trailer, no exception raised.
+        mock_rerank.return_value = ([hit()], config.TAU_ANSWER + 0.1)
+        mock_generate.side_effect = ["\n\nที่มา: พ.ร.บ.คุ้มครองแรงงาน\n  § มาตรา 61", "REAL ANSWER\n\nที่มา: ..."]
+
+        out, debug = self.engine.answer_with_debug("มาตรา 61 คืออะไร", provider="api", mode="dense")
+
+        self.assertEqual(out, "REAL ANSWER\n\nที่มา: ...")
+        self.assertEqual(debug["provider"], "local")
+        self.assertTrue(debug["provider_fallback"])
+        self.assertEqual(mock_generate.call_count, 2)
+
+    @patch("src.app.engine.generate")
+    @patch("src.app.engine.rerank")
+    @patch("src.app.engine.dynamic_k", return_value=(3, 4))
+    def test_retries_other_provider_on_degenerate_repetition_body(self, _dk, mock_rerank, mock_generate):
+        # A second, distinct qwen3.6-flash failure mode found via real live
+        # LINE testing: not empty, but the question echoed back verbatim
+        # dozens of times (occasionally with leaked meta-commentary) before
+        # recovering into a real answer -- non-empty so _is_empty_body alone
+        # would have accepted it as-is.
+        mock_rerank.return_value = ([hit()], config.TAU_ANSWER + 0.1)
+        looped = "\n".join(["ต้องใช้อะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย"] * 20) + "\n\nที่มา: ..."
+        mock_generate.side_effect = [looped, "REAL ANSWER\n\nที่มา: ..."]
+
+        out, debug = self.engine.answer_with_debug("ต้องใช้อะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย", provider="api", mode="dense")
+
+        self.assertEqual(out, "REAL ANSWER\n\nที่มา: ...")
+        self.assertTrue(debug["provider_fallback"])
+        self.assertEqual(mock_generate.call_count, 2)
 
 
 if __name__ == "__main__":
