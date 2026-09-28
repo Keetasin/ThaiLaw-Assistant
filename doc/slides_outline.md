@@ -97,21 +97,27 @@
 
 ### ข้อความบนสไลด์
 
-```text
-LINE User
-   ↓
-Query Processing: rewrite + router
-   ↓
-Dense: ChromaDB + BM25       Graph: Neo4j
-              ↓               ↓
-          Hybrid Fusion: weighted RRF
-                       ↓
-              Rerank + safety-net
-                       ↓
-          LLM: Ollama local / dotBlue API
-                       ↓
-       Flex Message + มาตราอ้างอิง + ลิงก์ตัวบท
+```mermaid
+flowchart TD
+    A["LINE User"] --> B["Query Processing<br/>rewrite + router"]
+    B --> C1["Embedding bge-m3"]
+    C1 --> C2["Dense Search<br/>ChromaDB"]
+    B --> C3["BM25<br/>word (pythainlp)"]
+    B --> D["Graph Retrieval<br/>Neo4j / offline graph.json"]
+    B --> C4["BM25<br/>char 3-gram"]
+    C2 --> E["Hybrid Fusion<br/>weighted RRF, 4-way"]
+    C3 --> E
+    C4 --> E
+    D --> E
+    E --> F1["Graph-seeded expansion<br/>1-hop REFERS_TO/PENALIZED_BY"]
+    F1 --> F2["Cross-encoder Rerank<br/>bge-reranker-v2-m3"]
+    F2 --> F3["Safety-net<br/>ensure_graph_hits_survive"]
+    F3 --> G["Zone gate<br/>answer / borderline / general_knowledge"]
+    G --> H["LLM<br/>Ollama local / dotBlue API"]
+    H --> I["Flex Message<br/>มาตราอ้างอิง + ลิงก์ตัวบท"]
 ```
+
+วางไฟล์ `.mmd` นี้เข้า draw.io ผ่าน **Extras → Edit Diagram... → เลือก Mermaid** (หรือ File → Import from → เก็บ code ไว้แปะ) เพื่อ generate diagram แก้ต่อได้
 
 **หน้านี้แค่ภาพรวม** — รายละเอียด Dense/Graph/Hybrid/LLM/Integration แยกพูดหน้าถัดไปทีละส่วน
 
@@ -150,6 +156,38 @@ Dense: ChromaDB + BM25       Graph: Neo4j
 - 326 nodes, 720 edges, 12/13 node types ตามแผน (ขาดแค่ `Penalty` — ไม่มี `HAS_PENALTY` triple ในตัวอย่าง extraction), orphan nodes = 0
 - Triple extraction 30 รายการ (LLM-extracted), human-approved 15/30 (50% แต่ไม่สุ่ม — ดูสไลด์ Graph RAG)
 
+### Mermaid diagram: PDF → เก็บข้อมูล (สำหรับ draw.io)
+
+```mermaid
+flowchart TD
+    A["ไฟล์ PDF/HTML ต้นฉบับ"] --> B["ดึงข้อความตัวบทกฎหมาย + FAQ"]
+    B --> C["ทำความสะอาดข้อความ<br/>ลบ header/footer, แก้เลข"]
+    C --> D["แบ่งหมวด/มาตรา"]
+    D --> E["มาตราทั้งหมด<br/>187 มาตรา"]
+    E --> F["แบ่งเป็นชิ้นข้อมูล<br/>1 มาตรา = 1 chunk"]
+    F --> G["ชุดข้อมูล chunks<br/>195 ชิ้น + metadata"]
+    G --> H["แปลงข้อความเป็นเวกเตอร์<br/>embedding"]
+    G --> I["ทำดัชนีคำค้น<br/>keyword index"]
+    G --> J["สกัดความสัมพันธ์ด้วย LLM<br/>+ คนตรวจสอบ"]
+    H --> K["คลังเวกเตอร์<br/>Vector DB"]
+    I --> L["ดัชนีคำค้น<br/>Lexical index"]
+    J --> M["สร้างกราฟความรู้"]
+    M --> N["ฐานข้อมูลกราฟ<br/>Knowledge Graph"]
+    K --> O["ระบบค้นหา → ตอบคำถามผู้ใช้"]
+    L --> O
+    N --> O
+```
+
+วางเข้า draw.io ผ่าน **Extras → Edit Diagram... → เลือก Mermaid** เหมือนหน้า 3
+
+**ข้อมูลชุดเดียวกัน เก็บไว้ 3 ที่ เพื่อใช้คนละหน้าที่:**
+
+- **คลังเวกเตอร์ (Vector DB)** — `bge-m3` embed 195 chunks, หาความหมายใกล้เคียง
+- **ดัชนีคำค้น (Lexical index)** — BM25 word+char 3-gram, จับคำ/เลขมาตราตรงตัว
+- **ฐานข้อมูลกราฟ (Knowledge Graph)** — 326 nodes / 720 edges, ตอบคำถามที่ต้องเชื่อมหลายมาตรา
+
+*(รายละเอียดเชิงลึกของ Dense/Graph อยู่หน้า 5–6)*
+
 ### ภาพที่ใส่
 
 - `[แคปภาพ]` ตัวอย่าง chunk จริงจาก `data/chunks.jsonl` (1-2 แถว, เบลอถ้าจำเป็น) หรือ metadata schema
@@ -169,7 +207,19 @@ Dense: ChromaDB + BM25       Graph: Neo4j
 
 ### ข้อความบนสไลด์
 
-**Pipeline เต็ม:** Embedding (`BAAI/bge-m3`, CPU) → ChromaDB `law` collection (195 chunks) → BM25 (word `pythainlp newmm` + character 3-gram) → Retrieval → Context Selection → LLM
+**Pipeline เต็ม:**
+
+```mermaid
+flowchart LR
+    Q["คำถามผู้ใช้<br/>(ผ่าน Query Processing)"] --> E["Embedding<br/>bge-m3"]
+    E --> V["ChromaDB<br/>195 chunks"]
+    V --> C["Context Selection"]
+    C --> L["LLM"]
+```
+
+BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ Dense RAG ตาม rubric — อยู่ในสไลด์ 7 (Hybrid RAG) แล้ว หน้านี้โชว์แค่สาย Dense ล้วนๆ
+
+วางเข้า draw.io ผ่าน **Extras → Edit Diagram... → เลือก Mermaid** เหมือนหน้าอื่น
 
 **Tuning ที่ทำจริง (ไม่ใช่แค่ default config):**
 
