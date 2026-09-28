@@ -223,12 +223,12 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 **Tuning ที่ทำจริง (ไม่ใช่แค่ default config):**
 
-| พารามิเตอร์ | ผลทดลอง |
-|---|---|
-| Top-K (3/5/10) | k=5 คือจุดคุ้มค่าที่สุด (3→5 recall เพิ่มชัด, 5→10 แทบไม่ต่าง) |
-| Similarity threshold τ | τ=0.4 → recall เหลือ 14%, τ=0.5 → **เหลือ 0% ทุกคำถาม** — พิสูจน์ว่า absolute cosine threshold ไม่เหมาะกับ domain นี้ |
-| Rerank on/off | D+R ดีกว่า D เดี่ยวๆ ทุก metric (Hit@1 0.460→0.520) |
-| Chunking (per-section vs fixed-512) | per-section recall@5 0.246 vs fixed-512 0.228 (n=126/กลุ่ม) — per-section ดีกว่าจริง |
+| พารามิเตอร์ | ลองอะไร | สรุปสั้น |
+|---|---|---|
+| Top-K | 3 / 5 / 10 | **k=5 คุ้มสุด** (3→5 ดีขึ้นชัด, 5→10 แทบไม่ต่าง) |
+| Threshold τ | ตัดคะแนนต่ำกว่าเกณฑ์ทิ้ง | **ใช้ไม่ได้** — τ=0.5 ทิ้งหมด 0% แม้คำตอบถูกก็โดนทิ้ง → ใช้ rerank ตัดสินแทน |
+| Rerank | เปิด/ปิด | **เปิดดีกว่า** ทุก metric |
+| Chunking | per-section vs fixed-512 | **per-section ดีกว่า** |
 
 **Dense เดี่ยวๆ (Hit@1 ต่อหมวด):** lookup 0.38, single-hop 0.70, procedure 0.25, multi-hop 0.40
 
@@ -289,12 +289,14 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 **Hit@1 ต่อหมวดคำถาม (n คำถามในวงเล็บ):**
 
-| หมวด | D (dense) | G (graph) | H4 (+router, ไม่ rerank) | H5 (ระบบเต็ม) |
+| หมวด | D (dense) | G (graph) | H4 (+router, ไม่ rerank) | H5 (dense+graph+rerank, ไม่รวม safety-net) |
 |---|---:|---:|---:|---:|
 | lookup (8) | 0.38 | **1.00** | **1.00** | **1.00** |
 | single-hop (10) | 0.70 | 0.20 | **0.90** | 0.80 |
 | procedure (8) | 0.25 | 0.38 | **0.62** | 0.50 |
 | multi-hop (10) | 0.40 | 0.10 | 0.40 | 0.10 |
+
+*หมายเหตุ: ตารางนี้รันจาก `eval/run_retrieval.py` ซึ่งจำลอง pipeline เท่านั้น ไม่ได้เรียก `engine.py` จริง — จึงไม่มี safety-net (`ensure_graph_hits_survive`) รวมอยู่ใน H5 คอลัมน์นี้ หลักฐานว่า safety-net ได้ผลจริงต้องดูจากการทดสอบตรงกับ engine เต็ม pipeline แทน (ดูหลักฐานสำรองท้ายไฟล์)*
 
 **Finding สำคัญที่สุดของโครงการ:** cross-encoder rerank (`bge-reranker-v2-m3`) ตัดสินจาก**ความคล้ายข้อความล้วนๆ ไม่รู้จัก graph provenance** — พอ graph leg แข็งแรงขึ้น (H4) rerank กลับ**ดันผลลัพธ์ที่ถูกออกไป** (H4 ชนะ H5 เกือบทุกหมวด) → ทดลองปรับ router weight ก่อน แต่**ไม่ได้ผล** (candidate pool ไม่ขึ้นกับ weight, root cause คือ rerank ไม่ใช่ router — negative result ที่มีค่า) → แก้ด้วย **safety-net หลัง rerank** (`ensure_graph_hits_survive`) แทนที่จะแก้ rerank เอง (effort สูงกว่ามาก)
 
@@ -323,10 +325,17 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 ### ข้อความบนสไลด์
 
-- Ollama: `qwen3.5:4b`, `gemma3:4b` รันบน GPU 6 GB
-- VRAM คงที่ `3774–3972 MiB` ตลอด `num_ctx` ที่ทดสอบ (พอดีกับงบ hardware ที่ตั้งไว้)
-- `num_ctx` sweep: 2048 / 4096 / 8192 → throughput ต่างกัน **<15%** เพราะ context จริงที่ใช้ (Section Card, งบ 6000 ตัวอักษรสำหรับ local) สั้นกว่า 2048 tokens อยู่แล้วในทุกกรณีทดสอบ
-- Local เหมาะกับควบคุมข้อมูลเอง + ไม่มีค่า API ต่อคำขอ, ข้อจำกัดคือ VRAM 6GB จำกัดขนาดโมเดลที่เลือกได้
+- **เลือกโมเดลให้พอดี Hardware**: `qwen3.5:4b`, `gemma3:4b` (Ollama) บน GPU 6GB
+- **ปรับ Configuration/Context**: `num_ctx` sweep 2048/4096/8192 + `CONTEXT_BUDGET_CHARS` แยกงบ local (6000 ตัวอักษร) เทียบ API
+
+| Model | VRAM | Response Time เฉลี่ย (n=50) | Throughput (2048/4096/8192) |
+|---|---:|---:|---|
+| `qwen3.5:4b` | 3774–3972 MiB | **38.3s** | 24.7 / 22.4 / 22.5 tok/s |
+| `gemma3:4b` | 3744–3972 MiB | **48.5s** | 27.2 / 26.5 / 29.0 tok/s |
+
+ต่างกัน <15% ตาม num_ctx เพราะ context จริงสั้นกว่า 2048 tokens อยู่แล้ว
+
+Local เหมาะควบคุมข้อมูลเอง + ไม่มีค่า API ต่อคำขอ, ข้อจำกัด: VRAM 6GB จำกัดขนาดโมเดล
 
 ### ภาพที่ใส่
 
@@ -335,11 +344,11 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 ### หลักฐานกำกับบนสไลด์
 
-`หลักฐาน: src/llm/client.py · src/config.py · doc/report.md §4.2`
+`หลักฐาน: src/llm/client.py · src/config.py · doc/report.md §4.2 · eval/results/generation_H5_local_qwen3.5-4b.csv · eval/results/generation_H5_local_gemma3-4b.csv`
 
 ### คำพูด
 
-"เราเลือก Local LLM ให้พอดีกับ GPU 6GB ที่มี วัด VRAM และ throughput จริงที่หลาย context length พบว่า context ที่ระบบใช้จริงสั้นพอที่ num_ctx ใหญ่ขึ้นแทบไม่กระทบความเร็ว — เป็นข้อมูลที่ช่วยตัดสินใจตั้งค่า production"
+"เราเลือก Local LLM ให้พอดีกับ GPU 6GB ที่มี วัด VRAM และ throughput จริงที่หลาย context length พบว่า context ที่ระบบใช้จริงสั้นพอที่ num_ctx ใหญ่ขึ้นแทบไม่กระทบความเร็ว และวัด response time จริงจาก 50 คำถามด้วย — local ช้ากว่า API เล็กน้อย (38-48s vs 36s) แลกกับควบคุมข้อมูลได้เองและไม่มีค่า API ต่อคำขอ — เป็นข้อมูลที่ช่วยตัดสินใจตั้งค่า production"
 
 ---
 
@@ -598,6 +607,8 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 | ระบบกันคำตอบผิดอย่างไร | `src/app/engine.py`, citation ใน `src/app/generator.py`, live `/debug` |
 | วัดผลอย่างไร | `eval/run_retrieval.py`, `eval/run_generation.py`, `eval/judge.py`, `doc/report.md` |
 | ทำไมถึงไม่ทำ judge validation (kappa) / user test | `doc/report.md` §5.4 — ตรวจแล้วไม่ใช่ข้อบังคับใน rubric, ตัดเพื่อประหยัดเวลาตาม cut-line |
+| ตาราง H5 ไม่รวม safety-net แล้วรู้ได้ไงว่า safety-net ได้ผลจริง | `doc/report.md` §3.5 — ทดสอบตรงกับ `engine.py` เต็ม pipeline (ไม่ใช่ ablation script): "สิทธิวันหยุด..." ได้ครบ 3/3 gold, "สิทธิการลา..." ได้ 2/3 (ดีขึ้นจาก 0/3) |
+| ทำไมไม่ใช้ H4 (ไม่มี rerank) เป็นระบบจริงไปเลยในเมื่อคะแนนสูงกว่า H5 | `src/app/engine.py::retrieve_and_rerank_hybrid` — rerank score คือค่าที่ zone gate (`TAU_ANSWER`/`TAU_REJECT`) ใช้ตัดสินใจตอบ/ปฏิเสธทั้งระบบ ถอดออกต้องหาค่าอื่นมาแทนทั้งกลไก ยังไม่ได้ทำ |
 
 ## สิ่งที่ต้องแก้ก่อน export PNG หรือขึ้นนำเสนอ
 
