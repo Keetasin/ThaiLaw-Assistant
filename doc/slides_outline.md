@@ -289,16 +289,16 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 **Hit@1 ต่อหมวดคำถาม (n คำถามในวงเล็บ):**
 
-| หมวด | D (dense) | G (graph) | H4 (+router, ไม่ rerank) | H5 (dense+graph+rerank, ไม่รวม safety-net) |
-|---|---:|---:|---:|---:|
-| lookup (8) | 0.38 | **1.00** | **1.00** | **1.00** |
-| single-hop (10) | 0.70 | 0.20 | **0.90** | 0.80 |
-| procedure (8) | 0.25 | 0.38 | **0.62** | 0.50 |
-| multi-hop (10) | 0.40 | 0.10 | 0.40 | 0.10 |
+| หมวด | D (dense) | G (graph) | H4 (+router, ไม่ rerank) | H5 (ablation, ไม่รวม safety-net) | H5+safety-net (จริงผ่าน engine.py) |
+|---|---:|---:|---:|---:|---:|
+| lookup (8) | 0.38 | **1.00** | **1.00** | 1.00 | 1.00 |
+| single-hop (10) | 0.70 | 0.20 | **0.90** | 0.80 | 0.80 |
+| procedure (8) | 0.25 | 0.38 | **0.62** | 0.50 | 0.50 |
+| multi-hop (10) | 0.40 | 0.10 | 0.40 | 0.10 | **0.20** |
 
-*หมายเหตุ: ตารางนี้รันจาก `eval/run_retrieval.py` ซึ่งจำลอง pipeline เท่านั้น ไม่ได้เรียก `engine.py` จริง — จึงไม่มี safety-net (`ensure_graph_hits_survive`) รวมอยู่ใน H5 คอลัมน์นี้ หลักฐานว่า safety-net ได้ผลจริงต้องดูจากการทดสอบตรงกับ engine เต็ม pipeline แทน (ดูหลักฐานสำรองท้ายไฟล์)*
+*หมายเหตุ: คอลัมน์ "H5 (ablation)" รันจาก `eval/run_retrieval.py` ซึ่งจำลอง pipeline เท่านั้น ไม่มี safety-net คอลัมน์ "H5+safety-net" คือของจริง — เรียก `RAGEngine.retrieve_and_rerank_hybrid()` ตรงๆ (ครบ router+fusion+graph-seeded-expand+rerank+complete_penalty_partners+ensure_graph_hits_survive) กับ 46 คำถามที่มี gold_sections จาก `eval/testset.jsonl` รันจริงวันนี้ (ผลดิบ: `eval/results/retrieval_H5_with_safetynet.json`, definition=0.833, aggregation=0.250 — ไม่โชว์ในตารางนี้เพราะตารางหลักเลือกแค่ 4 หมวด) — safety-net ช่วย multi-hop ได้จริง (0.10→0.20) แต่ยังตามหลัง H4 (0.40) อยู่มาก ไม่ได้ปิดช่องว่างทั้งหมด*
 
-**Finding สำคัญที่สุดของโครงการ:** cross-encoder rerank (`bge-reranker-v2-m3`) ตัดสินจาก**ความคล้ายข้อความล้วนๆ ไม่รู้จัก graph provenance** — พอ graph leg แข็งแรงขึ้น (H4) rerank กลับ**ดันผลลัพธ์ที่ถูกออกไป** (H4 ชนะ H5 เกือบทุกหมวด) → ทดลองปรับ router weight ก่อน แต่**ไม่ได้ผล** (candidate pool ไม่ขึ้นกับ weight, root cause คือ rerank ไม่ใช่ router — negative result ที่มีค่า) → แก้ด้วย **safety-net หลัง rerank** (`ensure_graph_hits_survive`) แทนที่จะแก้ rerank เอง (effort สูงกว่ามาก)
+**Finding สำคัญที่สุดของโครงการ:** cross-encoder rerank (`bge-reranker-v2-m3`) ตัดสินจาก**ความคล้ายข้อความล้วนๆ ไม่รู้จัก graph provenance** — พอ graph leg แข็งแรงขึ้น (H4) rerank กลับ**ดันผลลัพธ์ที่ถูกออกไป** (H4 ชนะ H5 เกือบทุกหมวด) → ทดลองปรับ router weight ก่อน แต่**ไม่ได้ผล** (candidate pool ไม่ขึ้นกับ weight, root cause คือ rerank ไม่ใช่ router — negative result ที่มีค่า) → แก้ด้วย **safety-net หลัง rerank** (`ensure_graph_hits_survive`) แทนที่จะแก้ rerank เอง (effort สูงกว่ามาก) — safety-net ช่วยจริงแต่บางส่วน ไม่ใช่ยาแก้ปัญหา rerank ทั้งหมด
 
 **Statistical test (D vs H5, bootstrap 95% CI + Wilcoxon, n=50):** mean diff +0.023, CI (−0.060, +0.113), **p = 0.52 — ไม่ significant ในภาพรวม** แต่ per-category ชนะ/แพ้ชัดเจนคนละทาง (หักล้างกันในค่าเฉลี่ยรวม)
 
@@ -313,7 +313,7 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 ### หลักฐานกำกับบนสไลด์
 
-`หลักฐาน: doc/report.md §3.1–3.5, §5.1 · doc/retrieval_baseline.md · eval/run_retrieval.py · eval/analyze.ipynb · src/retrieval/fusion.py · src/retrieval/reranker.py`
+`หลักฐาน: doc/report.md §3.1–3.5, §5.1 · doc/retrieval_baseline.md · eval/run_retrieval.py · eval/results/retrieval_H5_with_safetynet.json · eval/analyze.ipynb · src/retrieval/fusion.py · src/retrieval/reranker.py`
 
 ### คำพูด
 
@@ -325,8 +325,9 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 ### ข้อความบนสไลด์
 
-- **เลือกโมเดลให้พอดี Hardware**: `qwen3.5:4b`, `gemma3:4b` (Ollama) บน GPU 6GB
-- **ปรับ Configuration/Context**: `num_ctx` sweep 2048/4096/8192 + `CONTEXT_BUDGET_CHARS` แยกงบ local (6000 ตัวอักษร) เทียบ API
+- รันบน Ollama: `qwen3.5:4b`, `gemma3:4b` — ขนาดโมเดลเลือกให้พอดีกับ GPU 6GB ที่มี
+- ทดลองปรับ `num_ctx` (2048/4096/8192) และตั้งงบ context ไว้ที่ 6000 ตัวอักษร (`CONTEXT_BUDGET_CHARS`)
+- ปิด thinking mode (`think=False`) เพราะ `qwen3.5:4b` เป็น thinking model — ไม่ปิดจะเผา `num_predict` กับ reasoning trace จนคำตอบขาด
 
 | Model | VRAM | Response Time เฉลี่ย (n=50) | Throughput (2048/4096/8192) |
 |---|---:|---:|---|
@@ -356,19 +357,16 @@ Local เหมาะควบคุมข้อมูลเอง + ไม่�
 
 ### ข้อความบนสไลด์
 
-- dotBlue: `qwen/qwen3.6-flash` (หลัก), เทียบกับ `gpt-4o-mini`/`deepseek-chat` ในบาง config
-- มี retry + fallback provider (api↔local) เมื่อคำตอบว่าง/ผู้ให้บริการมีปัญหา
-- จัดการ prompt, context และ token budget แยกตาม local/api (`CONTEXT_BUDGET_CHARS`)
+API LLM ผ่าน dotBlue — ทดสอบ 2 โมเดล (`qwen3.6-flash`, `gpt-4o-mini`) ด้วยการจัดการชุดเดียวกัน: **Prompt** ส่ง `enable_thinking:False` · **Context** งบ 12000 ตัวอักษร · **Token** คุมด้วย `NUM_PREDICT=2500` · **Error** retry 3 ครั้ง + fallback ไป local เมื่อคำตอบว่าง/ไร้ประโยชน์
 
-**Production bug ที่ค้นพบและแก้แล้ว (กระทบผู้ใช้จริงบน LINE ไม่ใช่แค่ eval):**
+**ตัวชี้วัดที่วัดจริง:**
 
-| | ก่อนแก้ | หลังแก้ |
+| ตัวชี้วัด | `qwen3.6-flash` (หลัก) | `gpt-4o-mini` |
 |---|---:|---:|
-| `NUM_PREDICT` | 512 | **2500** |
-| คำตอบว่างเปล่า | **34%** ของคำถามจริง | **6%** |
-| Correctness (judge, 1-5) | 1.40 | **4.14** (final) |
+| Response Time เฉลี่ย (n=50) | 35.8s | 39.4s |
+| Resource Usage (completion tokens เฉลี่ย, n=10 จริงผ่าน engine) | **1461.7** | **103.6** |
 
-**Root cause ยืนยันด้วยการวัดตรง:** โมเดลต้องการ completion tokens **~1700-1800** ก่อนเริ่มตอบจริง (เผาไปกับ hidden reasoning แม้ส่ง `enable_thinking: False`) — ที่ 512 ตัดจบก่อนตอบเสมอ
+Root cause: qwen-flash เผา completion tokens กับ hidden reasoning ก่อนเริ่มตอบจริง (แม้ปิด `enable_thinking`) จึงต้องการ `NUM_PREDICT` สูงกว่า gpt-4o-mini ถึง ~14 เท่า
 
 ### ภาพที่ใส่
 
@@ -377,11 +375,11 @@ Local เหมาะควบคุมข้อมูลเอง + ไม่�
 
 ### หลักฐานกำกับบนสไลด์
 
-`หลักฐาน: src/llm/client.py · src/config.py · src/app/generator.py · doc/report.md §4.0`
+`หลักฐาน: src/llm/client.py · src/config.py · src/app/generator.py · doc/report.md §4.0 · eval/results/generation_H5_api_qwen-flash.csv · eval/results/token_usage_2models.json`
 
 ### คำพูด
 
-"เราพบบั๊กจริงที่กระทบผู้ใช้จริงบน LINE — API ตอบว่างเปล่า 34% ของเวลา เพราะ token ถูกใช้กับ hidden reasoning ก่อนเริ่มคำตอบ เราวัด root cause ตรงๆ ด้วยการนับ completion tokens จนเจอว่าต้องการ ~1700-1800 tokens แก้ด้วยการเพิ่ม token budget และวัดซ้ำจน correctness เพิ่มจาก 1.40 เป็น 4.14 จาก 5"
+"API LLM ของเราจัดการทั้ง prompt, context, token budget และ error ครบ — แต่จุดที่น่าสนใจสุดคือบั๊กจริงที่กระทบผู้ใช้จริงบน LINE: API ตอบว่างเปล่า 34% ของเวลา เพราะ token ถูกใช้กับ hidden reasoning ก่อนเริ่มคำตอบ เราวัด root cause ตรงๆ ด้วยการนับ completion tokens จนเจอว่าต้องการ ~1700-1800 tokens แก้ด้วยการเพิ่ม token budget และวัดซ้ำจน correctness เพิ่มจาก 1.40 เป็น 4.14 จาก 5"
 
 ---
 
@@ -607,7 +605,7 @@ Local เหมาะควบคุมข้อมูลเอง + ไม่�
 | ระบบกันคำตอบผิดอย่างไร | `src/app/engine.py`, citation ใน `src/app/generator.py`, live `/debug` |
 | วัดผลอย่างไร | `eval/run_retrieval.py`, `eval/run_generation.py`, `eval/judge.py`, `doc/report.md` |
 | ทำไมถึงไม่ทำ judge validation (kappa) / user test | `doc/report.md` §5.4 — ตรวจแล้วไม่ใช่ข้อบังคับใน rubric, ตัดเพื่อประหยัดเวลาตาม cut-line |
-| ตาราง H5 ไม่รวม safety-net แล้วรู้ได้ไงว่า safety-net ได้ผลจริง | `doc/report.md` §3.5 — ทดสอบตรงกับ `engine.py` เต็ม pipeline (ไม่ใช่ ablation script): "สิทธิวันหยุด..." ได้ครบ 3/3 gold, "สิทธิการลา..." ได้ 2/3 (ดีขึ้นจาก 0/3) |
+| ตาราง H5 ไม่รวม safety-net แล้วรู้ได้ไงว่า safety-net ได้ผลจริง | รันจริงผ่าน `RAGEngine.retrieve_and_rerank_hybrid()` ทั้ง 46 คำถาม (ไม่ใช่แค่ 2-3 ตัวอย่าง): `eval/results/retrieval_H5_with_safetynet.json` — multi-hop Hit@1 0.10→0.20, หมวดอื่นเท่าเดิม; ดู `doc/report.md` §3.5 สำหรับตัวอย่างเจาะลึกเพิ่ม |
 | ทำไมไม่ใช้ H4 (ไม่มี rerank) เป็นระบบจริงไปเลยในเมื่อคะแนนสูงกว่า H5 | `src/app/engine.py::retrieve_and_rerank_hybrid` — rerank score คือค่าที่ zone gate (`TAU_ANSWER`/`TAU_REJECT`) ใช้ตัดสินใจตอบ/ปฏิเสธทั้งระบบ ถอดออกต้องหาค่าอื่นมาแทนทั้งกลไก ยังไม่ได้ทำ |
 
 ## สิ่งที่ต้องแก้ก่อน export PNG หรือขึ้นนำเสนอ
