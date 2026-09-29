@@ -119,6 +119,12 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def progress(tag, i, n, t_start):
+    """One flush-ed line per item so a long run can be checked: done/total, elapsed, ETA."""
+    el = time.time() - t_start
+    print(f"[progress] {tag} {i}/{n} ({i / n:.0%}) elapsed {el / 60:.1f} min, ETA ~{el / i * (n - i) / 60:.1f} min", flush=True)
+
+
 def run_matrix(rows: list[dict], output_dir: Path = RESULTS, only: str | None = None) -> None:
     engine = RAGEngine()
     matrix = [m for m in MATRIX if m[0] == only] if only else MATRIX
@@ -133,7 +139,8 @@ def run_matrix(rows: list[dict], output_dir: Path = RESULTS, only: str | None = 
         vram = VRAMSampler() if provider == "local" else None
         out_rows = []
         with (vram if vram else contextlib.nullcontext()):
-            for row in rows:
+            t_start = time.time()
+            for i, row in enumerate(rows, 1):
                 session_id = f"eval-{label}-{row['id']}"  # unique per row -> history always empty, no spurious rewrite
                 t0 = time.time()
                 try:
@@ -151,6 +158,7 @@ def run_matrix(rows: list[dict], output_dir: Path = RESULTS, only: str | None = 
                     "answer": answer, "error": error,
                     **citation_metrics(answer, row.get("gold_sections", [])),
                 })
+                progress(label, i, len(rows), t_start)
         if vram:
             for r in out_rows:
                 r["peak_vram_mib"] = vram.peak

@@ -7,6 +7,7 @@ and computing Cohen's kappa / Spearman once the team fills in human scores.
 from __future__ import annotations
 
 import argparse
+import time
 import csv
 import json
 import random
@@ -103,7 +104,7 @@ def generation_csvs(results_dir: Path = RESULTS) -> list[Path]:
 
 
 def run_judge(results_dir: Path = RESULTS, checkpoint_every: int = 10, skip_configs: set[str] | None = None,
-              only_config: str | None = None, out_path: Path | None = None) -> Path:
+              only_config: str | None = None, out_path: Path | None = None, shard: tuple[int, int] | None = None) -> Path:
     # A single transient API error (a real dotBlue 500 mid-run once burned ~430
     # already-paid-for judge calls with nothing saved, since this used to write
     # only once at the very end) must never lose already-scored rows again --
@@ -123,7 +124,10 @@ def run_judge(results_dir: Path = RESULTS, checkpoint_every: int = 10, skip_conf
             continue
         if only_config and row_config != only_config:
             continue
-        for row in rows:
+        if shard:  # rows are independent: shard i of n takes every n-th row so n processes split the API-bound wait
+            rows = [r for idx, r in enumerate(rows) if idx % shard[1] == shard[0]]
+        t_start = time.time()
+        for i, row in enumerate(rows, 1):
             gold = testset.get(row["id"], {})
             try:
                 scores = score_answer(row["question"] if "question" in row else gold.get("question", ""), row.get("answer", ""), row.get("category", gold.get("category", "")), gold.get("key_points", []))
@@ -131,6 +135,8 @@ def run_judge(results_dir: Path = RESULTS, checkpoint_every: int = 10, skip_conf
                 scores = {"correctness": None, "faithfulness": None, "citation_accuracy": None, "thai_clarity": None, "key_point_coverage": None, "oos_handled_correctly": None, "judge_parse_error": f"judge call failed: {exc!r}"}
             out_rows.append({**row, "source_file": path.name, **scores})
             print(f"[judge] {path.stem} {row['id']}: correctness={scores.get('correctness')}")
+            el = time.time() - t_start
+            print(f"[progress] judge {path.stem} {i}/{len(rows)} ({i / len(rows):.0%}) elapsed {el / 60:.1f} min, ETA ~{el / i * (len(rows) - i) / 60:.1f} min", flush=True)
             if len(out_rows) % checkpoint_every == 0:
                 write_csv(out_path, out_rows)
     write_csv(out_path, out_rows)
@@ -203,6 +209,7 @@ def main() -> None:
     parser.add_argument("--skip-config", default="", help="comma-separated 'config' column values to skip (e.g. D_api_qwen-flash,G_api_qwen-flash)")
     parser.add_argument("--only-config", default=None, help="judge only this one 'config' value -- run several as parallel processes, each with --output judge_scores_<name>.csv, then --merge")
     parser.add_argument("--output", type=Path, default=None, help="output CSV path (with --only-config, for parallel runs)")
+    parser.add_argument("--shard", default=None, help="i/n: judge only rows i, i+n, ... (run n processes in parallel with different --output, then concatenate)")
     parser.add_argument("--merge", action="store_true", help="merge eval/results/judge_scores_*.csv (from parallel --only-config runs) into judge_scores.csv")
     parser.add_argument("--validate", type=int, default=0, metavar="N", help="write an N-row human-vs-judge validation sample")
     parser.add_argument("--kappa", action="store_true", help="compute Cohen's kappa / Spearman from a filled validation sample")
@@ -211,7 +218,8 @@ def main() -> None:
         parser.error("pick at least one of --score/--validate N/--kappa/--merge")
     if args.score:
         skip = {c.strip() for c in args.skip_config.split(",") if c.strip()}
-        run_judge(skip_configs=skip, only_config=args.only_config, out_path=args.output)
+        shard = tuple(int(x) for x in args.shard.split("/")) if args.shard else None
+        run_judge(skip_configs=skip, only_config=args.only_config, out_path=args.output, shard=shard)
     if args.merge:
         merge_judge_outputs()
     if args.validate:
