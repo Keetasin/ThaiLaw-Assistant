@@ -104,7 +104,12 @@ def _strip_leading_pronoun(q):
 
 def _llm_short(prompt, provider="local"):
     llm = get_llm(provider=provider)
-    text, _usage = llm.chat([{"role": "user", "content": prompt}], temperature=0.0, num_predict=100)
+    # qwen3.6-flash (api) spends its completion budget on hidden reasoning
+    # before emitting text -- at 100 tokens rewrite/normalize came back ''
+    # and silently fell back to the raw query. Give api the full NUM_PREDICT
+    # (same reason as generate(), see doc/report.md §4.0).
+    num_predict = config.NUM_PREDICT if provider == "api" else 100
+    text, _usage = llm.chat([{"role": "user", "content": prompt}], temperature=0.0, num_predict=num_predict)
     return text.strip()
 
 
