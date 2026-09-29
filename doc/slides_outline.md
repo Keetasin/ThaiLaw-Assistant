@@ -28,7 +28,7 @@
 | 9 | API LLM | 40s | **6. API LLM** |
 | 10 | System Integration & Error Handling | 35s | **7. System Integration** |
 | 11 | Live Demo บน LINE | 80s | Integration (หลักฐานสด) |
-| 12 | Evaluation และบทเรียนจากบั๊กจริง | 55s | **8. Evaluation & Analysis** |
+| 12 | Evaluation และการวิเคราะห์ผลการทดลอง | 55s | **8. Evaluation & Analysis** |
 | 13 | สรุปและข้อจำกัด | 25s | ภาพรวม |
 | 14 | Rubric Self-score สรุปคะแนนตนเอง | 35s | Documentation/Presentation |
 
@@ -227,7 +227,7 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 |---|---|---|
 | Top-K | 3 / 5 / 10 | **k=5 คุ้มสุด** (3→5 ดีขึ้นชัด, 5→10 แทบไม่ต่าง) |
 | Threshold τ | ตัดคะแนนต่ำกว่าเกณฑ์ทิ้ง | **ใช้ไม่ได้** — τ=0.5 ทิ้งหมด 0% แม้คำตอบถูกก็โดนทิ้ง → ใช้ rerank ตัดสินแทน |
-| Rerank | เปิด/ปิด | **เปิดดีกว่า** ทุก metric |
+| Rerank | เปิด/ปิด (Dense-only) | **เปิดดีกว่าใน Dense-only** (Hit@1 0.46→0.52) — แต่ใน Hybrid ผลกลับกัน ดูสไลด์ 7 |
 | Chunking | per-section vs fixed-512 | **per-section ดีกว่า** |
 
 **Dense เดี่ยวๆ (Hit@1 ต่อหมวด):** lookup 0.38, single-hop 0.70, procedure 0.25, multi-hop 0.40
@@ -277,7 +277,7 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 ### คำพูด
 
-"เราสร้าง Graph ที่มี node และ relationship ที่มีความหมายจริง ไม่ใช่แค่มี Neo4j ตั้งไว้เฉยๆ และพิสูจน์ได้ว่า Graph ช่วยแก้จุดที่ Dense ทำไม่ได้จริง โดยเฉพาะคำถาม procedure ที่ดีขึ้นจาก 0.25 เป็น 0.62 — เราถึงขั้นเจอบั๊กจริงในโค้ด graph retrieval เอง (คืนผลแบบสุ่มแทนที่จะเดิน edge จริง) และแก้แล้ว"
+"เราสร้าง Graph ที่มี node และ relationship ที่มีความหมายจริง ไม่ใช่แค่มี Neo4j ตั้งไว้เฉยๆ และพิสูจน์ได้ว่า Graph ช่วยแก้จุดที่ Dense ทำไม่ได้จริง โดยเฉพาะคำถาม procedure ที่ดีขึ้นจาก 0.25 เป็น 0.62 — และ Graph เดี่ยวๆ ก็ดีขึ้นเกือบเท่าตัวเมื่อ ABOUT edges เชื่อม Topic กับมาตราได้จริง"
 
 ---
 
@@ -285,39 +285,43 @@ BM25 (lexical) และ Hybrid Fusion ไม่ใช่ส่วนของ D
 
 ### ข้อความบนสไลด์
 
-**Fusion pipeline:** Router (เลือก weight ตามประเภทคำถาม) → Weighted RRF (4 ทาง: dense/bm25-word/bm25-gram/graph) → Graph-seeded expansion (1-hop) → Cross-encoder rerank → Safety-net → Section Card ให้ LLM
+**Hybrid Pipeline (4 ขั้นตามเกณฑ์):**
 
-**Hit@1 ต่อหมวดคำถาม (n คำถามในวงเล็บ):**
+| ขั้น | ทำอะไร |
+|---|---|
+| **1. Routing** | Router จำแนกคำถาม 6 ประเภท (lookup / definition / single-hop / multi-hop / procedure / aggregation) แล้วเลือกน้ำหนัก dense : BM25 : graph ต่อประเภท |
+| **2. Fusion** | Weighted RRF 4 ทาง (dense · BM25-word · BM25-3gram · graph) → Graph-seeded expansion 1-hop ตาม `REFERS_TO` / `PENALIZED_BY` |
+| **3. Ranking** | Cross-encoder rerank (`bge-reranker-v2-m3`) → Safety-net คืนมาตราที่ Graph ยืนยัน และมาตราโทษคู่กัน |
+| **4. Context Aggregation** | รวมเป็น Section Card (มาตรา + บทที่ + ตัวบท) ภายใต้งบตัวอักษร local 6,000 / API 12,000 |
 
-| หมวด | D (dense) | G (graph) | H4 (+router, ไม่ rerank) | H5 (ablation, ไม่รวม safety-net) | H5+safety-net (จริงผ่าน engine.py) |
-|---|---:|---:|---:|---:|---:|
-| lookup (8) | 0.38 | **1.00** | **1.00** | 1.00 | 1.00 |
-| single-hop (10) | 0.70 | 0.20 | **0.90** | 0.80 | 0.80 |
-| procedure (8) | 0.25 | 0.38 | **0.62** | 0.50 | 0.50 |
-| multi-hop (10) | 0.40 | 0.10 | 0.40 | 0.10 | **0.20** |
+**ผลการทดลอง: Hybrid H5 (ระบบที่ใช้จริง) vs Dense อย่างเดียว** — production backend จริง, 46 คำถามที่มี gold section
 
-*หมายเหตุ: คอลัมน์ "H5 (ablation)" รันจาก `eval/run_retrieval.py` ซึ่งจำลอง pipeline เท่านั้น ไม่มี safety-net คอลัมน์ "H5+safety-net" คือของจริง — เรียก `RAGEngine.retrieve_and_rerank_hybrid()` ตรงๆ (ครบ router+fusion+graph-seeded-expand+rerank+complete_penalty_partners+ensure_graph_hits_survive) กับ 46 คำถามที่มี gold_sections จาก `eval/testset.jsonl` รันจริงวันนี้ (ผลดิบ: `eval/results/retrieval_H5_with_safetynet.json`, definition=0.833, aggregation=0.250 — ไม่โชว์ในตารางนี้เพราะตารางหลักเลือกแค่ 4 หมวด) — safety-net ช่วย multi-hop ได้จริง (0.10→0.20) แต่ยังตามหลัง H4 (0.40) อยู่มาก ไม่ได้ปิดช่องว่างทั้งหมด*
+| Metric | Dense | **Hybrid H5** | ผลต่าง |
+|---|---:|---:|---:|
+| Recall@5 | 0.679 | **0.726** | +0.047 |
+| MRR | 0.618 | **0.697** | +0.079 |
+| Hit@1 | 0.500 | **0.609** | +0.109 |
 
-**Finding สำคัญที่สุดของโครงการ:** cross-encoder rerank (`bge-reranker-v2-m3`) ตัดสินจาก**ความคล้ายข้อความล้วนๆ ไม่รู้จัก graph provenance** — พอ graph leg แข็งแรงขึ้น (H4) rerank กลับ**ดันผลลัพธ์ที่ถูกออกไป** (H4 ชนะ H5 เกือบทุกหมวด) → ทดลองปรับ router weight ก่อน แต่**ไม่ได้ผล** (candidate pool ไม่ขึ้นกับ weight, root cause คือ rerank ไม่ใช่ router — negative result ที่มีค่า) → แก้ด้วย **safety-net หลัง rerank** (`ensure_graph_hits_survive`) แทนที่จะแก้ rerank เอง (effort สูงกว่ามาก) — safety-net ช่วยจริงแต่บางส่วน ไม่ใช่ยาแก้ปัญหา rerank ทั้งหมด
+**ทำไมเลือก H5**
 
-**Statistical test (D vs H5, bootstrap 95% CI + Wilcoxon, n=50):** mean diff +0.023, CI (−0.060, +0.113), **p = 0.52 — ไม่ significant ในภาพรวม** แต่ per-category ชนะ/แพ้ชัดเจนคนละทาง (หักล้างกันในค่าเฉลี่ยรวม)
+- **วัดถึงคำตอบแล้ว:** correctness **4.14/5** · citation accuracy **3.84** (ไม่ใช้ RAG: 1.82) · out-of-scope 4/4
+- **Rerank score = ตัวตัดสิน** `answer` / `borderline` / `general_knowledge` ของ Zone gate
+- **ชนะเป็นหมวด:** lookup 0.38→1.00, procedure 0.25→0.50 · multi-hop และ aggregation ยังต่ำกว่า Dense → ภาพรวมยังไม่ significant (Recall@5, p = 0.52)
 
-**บทเรียน:** ต้องวิเคราะห์แยกตามประเภทคำถาม ไม่ดูค่าเฉลี่ยรวมอย่างเดียว — นี่คือเหตุผลที่ทุกตารางในสไลด์นี้แยก breakdown ตามหมวด
-
-**หากกรรมการถามวิธีวัด:** Hit@1 = ผลลัพธ์อันดับหนึ่งตรงกับ section ที่กำหนดใน gold set; recall@5 = มี gold section อยู่ใน 5 ผลลัพธ์แรก
+**หากกรรมการถาม:** Hit@1 = อันดับ 1 ตรง gold section; Recall@5 = gold อยู่ใน 5 อันดับแรก; ผล ablation เต็ม (D, G, H1–H5) อยู่ใน backup ท้ายเอกสาร
 
 ### ภาพที่ใส่
 
-- ทำกราฟแท่ง 4 กลุ่ม: D, G, H4, H5 ต่อหมวด (ไฮไลต์ procedure 0.25→0.62)
-- ใส่กล่องสีส้ม: "rerank ไม่รู้จัก graph provenance → แก้ด้วย safety-net"
+- แผนภาพ 4 กล่อง Routing → Fusion → Ranking → Context Aggregation (ใช้จาก slide 3 ย่อ)
+- กราฟแท่ง Dense vs Hybrid (Recall@5, MRR, Hit@1)
 
 ### หลักฐานกำกับบนสไลด์
 
-`หลักฐาน: doc/report.md §3.1–3.5, §5.1 · doc/retrieval_baseline.md · eval/run_retrieval.py · eval/results/retrieval_H5_with_safetynet.json · eval/analyze.ipynb · src/retrieval/fusion.py · src/retrieval/reranker.py`
+`หลักฐาน: src/retrieval/router.py · src/retrieval/fusion.py · src/retrieval/reranker.py · eval/results/retrieval_H5.csv · eval/results/retrieval_D.csv · eval/results/retrieval_H5_with_safetynet.json · eval/results/judge_scores_H5_api_qwen-flash.csv · doc/report.md §3.1–3.5, §5.1`
 
 ### คำพูด
 
-"นี่คือหัวใจของโครงการ และคะแนนหนักสุดของ rubric เราพบ finding ที่ไม่คาดคิดคือ reranker ไม่รู้ว่าผลลัพธ์มาจาก Graph จึงดันคำตอบที่ถูกออกไปเมื่อ graph leg แข็งแรงขึ้น เราลองแก้ที่ router ก่อนแต่ไม่ได้ผล วิเคราะห์จนเจอ root cause จริงว่าอยู่ที่ rerank แล้วแก้ด้วย safety-net แทน ผลรวมทางสถิติไม่ significant แต่ per-category ชนะ/แพ้ชัดเจนคนละทาง — เราเลือกรายงานอย่างตรงไปตรงมาแทนที่จะปัดตกความจริงข้อนี้"
+"Hybrid ของเรามีครบ 4 ขั้น: Routing เลือกน้ำหนักตามประเภทคำถาม, Fusion รวม Dense BM25 และ Graph ด้วย weighted RRF, Ranking ด้วย reranker และ safety-net, แล้วรวมเป็น Section Card ผลเทียบกับ Dense อย่างเดียวบนระบบจริง Recall@5 เพิ่มจาก 0.68 เป็น 0.73, MRR จาก 0.62 เป็น 0.70 และ Hit@1 จาก 0.50 เป็น 0.61 เราเลือก config นี้เพราะวัดถึงคุณภาพคำตอบแล้วได้ 4.14 จาก 5 และ zone gate ที่กันคำตอบนอกขอบเขตพึ่ง rerank score"
 
 ---
 
@@ -379,7 +383,7 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 
 ### คำพูด
 
-"API LLM ของเราจัดการทั้ง prompt, context, token budget และ error ครบ — แต่จุดที่น่าสนใจสุดคือบั๊กจริงที่กระทบผู้ใช้จริงบน LINE: API ตอบว่างเปล่า 34% ของเวลา เพราะ token ถูกใช้กับ hidden reasoning ก่อนเริ่มคำตอบ เราวัด root cause ตรงๆ ด้วยการนับ completion tokens จนเจอว่าต้องการ ~1700-1800 tokens แก้ด้วยการเพิ่ม token budget และวัดซ้ำจน correctness เพิ่มจาก 1.40 เป็น 4.14 จาก 5"
+"API LLM ของเราจัดการทั้ง prompt, context, token budget และ error ครบ — และวัดต้นทุนจริง: qwen-flash ใช้ completion tokens เฉลี่ย ~1,460 เพราะ hidden reasoning ก่อนตอบ เทียบ gpt-4o-mini ~104 เราจึงตั้ง token budget ให้เหมาะกับแต่ละโมเดล ผลคือ qwen-flash ได้ correctness 4.14 จาก 5 ที่ response time เฉลี่ย 35.8 วินาที"
 
 ---
 
@@ -395,7 +399,7 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 - Zone gate (`answer`/`borderline`/`general_knowledge`) ป้องกันคำตอบผิด พร้อม safety-net หลัง rerank
 - คำสั่งเสริมสำหรับ debug สด: `/mode dense|graph|hybrid`, `/llm local|api`, `/debug`, `/reset`
 
-**Error handling หลายชั้นที่พิสูจน์แล้วว่าจำเป็นจริง (ไม่ใช่ทฤษฎี):** Neo4j ล่ม → offline `data/graph.json` fallback, LLM ตอบว่าง/วนซ้ำ → retry ผู้ให้บริการอื่น, zone gate ตัดสินก่อน safety-net เติม hit (บั๊กจริงที่เจอ+แก้แล้ว — ดูสไลด์ Evaluation)
+**Error handling หลายชั้น:** Neo4j ล่ม → offline `data/graph.json` fallback, LLM ตอบว่าง/วนซ้ำ → retry ผู้ให้บริการอื่น, zone gate ตัดสิน answer/borderline/general_knowledge จาก rerank score + safety-net จาก graph
 
 ### ภาพที่ใส่
 
@@ -408,7 +412,7 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 
 ### คำพูด
 
-"ทุกองค์ประกอบทำงานเป็นระบบเดียวกันจริง ตั้งแต่ผู้ใช้ถามจน LLM ตอบกลับ พร้อม error handling หลายชั้นที่เราไม่ได้ออกแบบไว้เฉยๆ แต่พิสูจน์แล้วว่าจำเป็นจริงจากบั๊กที่เจอตอนทดสอบ LINE สด"
+"ทุกองค์ประกอบทำงานเป็นระบบเดียวกันจริง ตั้งแต่ผู้ใช้ถามจน LLM ตอบกลับ พร้อม error handling หลายชั้นทั้ง Neo4j ล่ม, LLM ตอบว่าง และ zone gate กันคำตอบนอกขอบเขต"
 
 ---
 
@@ -440,40 +444,58 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 
 ---
 
-## Slide 12 — Evaluation และบทเรียนจากบั๊กจริง
+## Slide 12 — Evaluation และการวิเคราะห์ผลการทดลอง
 
 ### ข้อความบนสไลด์
 
-**Evaluation ครบวงจร:**
+**การออกแบบการทดลอง:** 50 คำถาม × 7 หมวด (46 ข้อมี gold section + 4 ข้อ out-of-scope) · Retrieval: Recall@5, MRR, Hit@1 · Generation: LLM-as-judge 5 metrics (correctness, faithfulness, citation, clarity, key-point coverage)
 
-- Retrieval ablation: 8 configs (D, D+R, G, H1–H5) × 50 คำถาม, production backend จริง (ChromaDB + bge-reranker-v2-m3 จริง ไม่ใช่ mock)
-- Generation matrix: 7 configs (2 local + 3 API + 2 baseline)
-- LLM-as-judge: 5 metrics (correctness, faithfulness, citation accuracy, clarity, key-point coverage) — คะแนนสุดท้าย overall correctness **4.14/5** (50/50 พาร์สสำเร็จ)
-- Error analysis 20 เคส สรุป 3 กลุ่มปัญหาหลัก: (1) vocabulary/semantic gap (2) multi-hop primary-vs-penalty trade-off (3) graph coverage gap สำหรับ procedure
-- **Unit test: 122 ผ่านหมด** (final)
+**ตารางที่ 1 — Dense vs Graph vs Hybrid (Retrieval, 46 ข้อ)**
 
-**Live testing (หลัง eval script เสร็จ) พบเพิ่มอีก 3 บั๊กที่ automated eval ไม่เคยจับได้:**
+| Config | Recall@5 | MRR | Hit@1 |
+|---|---:|---:|---:|
+| Dense | 0.679 | 0.618 | 0.500 |
+| Graph | 0.337 | 0.337 | 0.326 |
+| **Hybrid H5** | **0.726** | **0.697** | **0.609** |
 
-1. Judge model SSE stream เสียหายกลางทาง (36% ของแถว) — ไม่ใช่ token cap แต่ field หลุด/สลับ → แก้ด้วย retry 3 ครั้ง/แถว
-2. Zone gate เช็ค score **ก่อน** safety-net เติม graph hit → ทิ้งคำตอบถูกไปเป็น out-of-scope → แก้ให้ safety-net bump score ก่อนเช็ค gate
-3. LLM ตอบวนซ้ำคำถามเดิม (ไม่ว่างเปล่าแต่ไร้ประโยชน์) → เพิ่ม `_is_degenerate_body()` ตรวจ repetition ratio
+**ตารางที่ 2 — Local LLM vs API LLM (LLM-as-judge 1–5, n=50, pipeline Hybrid H5 เดียวกัน)**
 
-**บทเรียน:** Automated evaluation อย่างเดียวไม่พอ ต้องทดสอบ live workflow ด้วย เพราะ paraphrase จากผู้ใช้จริงต่างจาก canonical phrasing ใน test set
+| กลุ่ม | โมเดล | Correctness | Faithfulness | Citation | Latency เฉลี่ย | หมายเหตุ |
+|---|---|---:|---:|---:|---:|---|
+| **API (หลัก)** | qwen3.6-flash | **4.14** | **4.00** | **3.84** | 35.8s | ~1,460 completion tokens/คำตอบ |
+| API | gpt-4o-mini | 3.62 | 3.60 | 3.72 | 39.4s | ~104 completion tokens/คำตอบ |
+| Local | qwen3.5:4b | 3.28 | 3.22 | 3.18 | 38.3s | VRAM ~3.9 GB · ~23 tok/s |
+| Local | gemma3:4b | 3.18 | 3.26 | 3.36 | 48.4s | VRAM ~3.9 GB · ~27 tok/s |
+| Baseline | No-RAG (qwen3.6-flash) | 3.44 | 3.31 | **1.82** | – | อ้างมาตราผิด/เดา |
 
-**ขอบเขตที่ทีมตัดสินใจไม่ทำ (ไม่ใช่ข้อบังคับใน rubric):** Judge validation (Cohen's κ), user test 5–8 คน — ตรวจแล้วว่าไม่มีคำว่า kappa/validation ใน rubric จริง ตัดเพื่อประหยัดเวลา
+*Judge = `qwen3.6-plus` (คนละโมเดลกับตัวตอบ แต่เป็นตระกูล Qwen เดียวกับ qwen3.6-flash — อาจมี self-preference bias; ยังไม่ได้ validate กับมนุษย์)*
+
+**อ่านผล:** API > Local ทั้ง correctness และ citation · Local 4B correctness ต่ำกว่า No-RAG แต่อ้างมาตราแม่นกว่าชัดเจน (citation 3.2–3.4 vs 1.82)
+
+**ตารางที่ 3 — วิเคราะห์สาเหตุ (Error analysis 20 เคส)**
+
+| ปัญหา | ตัวอย่าง | สาเหตุ | แนวทางต่อยอด |
+|---|---|---|---|
+| Vocabulary gap | "ลาป่วย", "ลากิจ" | คำพูดทั่วไป ≠ ถ้อยคำกฎหมาย ทั้ง Dense และ Graph พลาด | เพิ่ม alias ใน topic taxonomy |
+| Multi-hop trade-off | ฝ่าฝืนเวลาทำงานมีโทษอย่างไร | Rerank ตัดสินจากความคล้ายข้อความ ไม่รู้จัก graph provenance → มาตราเนื้อหาหลุด top-5 | rerank ที่รู้จัก graph provenance |
+| Graph coverage gap | ขั้นตอนยื่นคำร้องเลิกจ้าง | curated Topic→Step 30 topics ไม่ครอบคลุมทุก procedure | ขยาย taxonomy |
+
+**ข้อค้นพบหลัก:**
+- **Hybrid ดีกว่า Dense และ Graph เดี่ยว** ทุก metric — ผลต่างภาพรวมยังไม่ significant (p=0.52) เพราะบางหมวดชนะ (lookup, procedure) บางหมวดแพ้ (multi-hop) จึงวิเคราะห์แยกหมวด
+- **RAG จำเป็นต่อการอ้างอิง:** citation 3.84 เทียบ No-RAG 1.82
 
 ### ภาพที่ใส่
 
-- ทำกราฟสรุปผล evaluation หรือใช้ตาราง 3 กล่อง: Retrieval / Generation / Live test
+- ตารางที่ 1 + 2 เป็นหลัก · ตารางที่ 3 ใช้เป็นหลักฐานวิเคราะห์สาเหตุ
 - ถ้ามีเวลา แคป `eval/analyze.ipynb` cell ที่แสดง error analysis
 
 ### หลักฐานกำกับบนสไลด์
 
-`หลักฐาน: eval/run_retrieval.py · eval/run_generation.py · eval/judge.py · eval/analyze.ipynb · tests/ · doc/report.md §4–5`
+`หลักฐาน: eval/run_retrieval.py · eval/run_generation.py · eval/judge.py · eval/analyze.ipynb · tests/ · doc/report.md §3–5`
 
 ### คำพูด
 
-"เราวัดผลอย่างเป็นระบบครบทุกมิติ แล้วยังทดสอบ live บน LINE จริงหลัง eval เสร็จแล้ว เจอบั๊กเพิ่มอีก 3 ตัวที่ offline evaluation ไม่เห็น แก้ครบพร้อมเพิ่ม unit test ป้องกัน regression — นี่คือเหตุผลที่เราเชื่อว่า evaluation ของเราลึกกว่าการรัน test script ครั้งเดียวแล้วจบ"
+"เราออกแบบการทดลองเทียบ Dense, Graph และ Hybrid บน 50 คำถามด้วย Recall, MRR และ Hit@1 ผลคือ Hybrid ดีกว่าทั้ง Dense และ Graph เดี่ยวทั้งสามตัวชี้วัด และเทียบ LLM ทั้ง Local และ API ด้วย LLM-as-judge 5 มิติ โดย API ที่ใช้ Hybrid RAG ได้ correctness 4.14 จาก 5 ส่วน No-RAG อ้างมาตราผิดบ่อย citation แค่ 1.82 เราวิเคราะห์สาเหตุที่ระบบยังพลาดได้ 3 กลุ่ม คือ vocabulary gap, rerank ที่ไม่รู้จัก graph provenance และ graph coverage"
 
 ---
 
@@ -486,13 +508,13 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 - Dense RAG + Graph RAG + Hybrid Fusion ทำงานร่วมกันจริง มีหลักฐานผลทดลองครบ
 - รองรับทั้ง Local LLM และ API LLM พร้อม fallback และการวัด resource/cost
 - ใช้งานผ่าน LINE พร้อมมาตราอ้างอิง ตรวจสอบย้อนกลับได้
-- Evaluation + error analysis + live bug fixing ต่อเนื่อง 3 รอบ
+- Evaluation เปรียบเทียบ Dense/Graph/Hybrid + Local/API พร้อม error analysis และ statistical test
 
 **ข้อจำกัดที่ยอมรับอย่างชัดเจน**
 
 - ครอบคลุม พ.ร.บ. เพียง 1 ฉบับ
 - PDF มี glyph corruption มากกว่าที่เคยประเมิน
-- Reranker ยังไม่เข้าใจ graph provenance โดยตรง (แก้ด้วย safety-net แทน)
+- multi-hop และ aggregation: Hybrid ยังต่ำกว่า Dense (Hit@1 0.20 vs 0.40, 0.25 vs 0.50) เพราะ reranker ยังไม่เข้าใจ graph provenance (แก้ด้วย safety-net บางส่วน)
 - ผลรวมทางสถิติ D vs H5 ยังไม่ significant (`p=0.52`) — ประโยชน์ของ Hybrid ชัดเจนเฉพาะ per-category
 - VRAM 6 GB จำกัดขนาด Local LLM
 
@@ -562,7 +584,7 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 
 **อื่นๆ:**
 
-- `[ ]` กราฟ Hit@1 หน้า 7 (D/G/H4/H5 ต่อหมวด)
+- `[ ]` ตาราง/กราฟ Hit@1 หน้า 7 (Dense vs Hybrid ต่อหมวด)
 - `[ ]` กราฟ threshold τ หน้า 5 (optional)
 - `[ ]` วิดีโอ demo สำรอง (`doc/demo_video_script.md`) อัดไว้อย่างน้อย 1 วันก่อนนำเสนอ
 - `[ ]` เบลอ token, API key, user ID และข้อมูลส่วนตัวทุกภาพ
@@ -607,6 +629,7 @@ Root cause: qwen-flash เผา completion tokens กับ hidden reasoning �
 | ทำไมถึงไม่ทำ judge validation (kappa) / user test | `doc/report.md` §5.4 — ตรวจแล้วไม่ใช่ข้อบังคับใน rubric, ตัดเพื่อประหยัดเวลาตาม cut-line |
 | ตาราง H5 ไม่รวม safety-net แล้วรู้ได้ไงว่า safety-net ได้ผลจริง | รันจริงผ่าน `RAGEngine.retrieve_and_rerank_hybrid()` ทั้ง 46 คำถาม (ไม่ใช่แค่ 2-3 ตัวอย่าง): `eval/results/retrieval_H5_with_safetynet.json` — multi-hop Hit@1 0.10→0.20, หมวดอื่นเท่าเดิม; ดู `doc/report.md` §3.5 สำหรับตัวอย่างเจาะลึกเพิ่ม |
 | ทำไมไม่ใช้ H4 (ไม่มี rerank) เป็นระบบจริงไปเลยในเมื่อคะแนนสูงกว่า H5 | `src/app/engine.py::retrieve_and_rerank_hybrid` — rerank score คือค่าที่ zone gate (`TAU_ANSWER`/`TAU_REJECT`) ใช้ตัดสินใจตอบ/ปฏิเสธทั้งระบบ ถอดออกต้องหาค่าอื่นมาแทนทั้งกลไก ยังไม่ได้ทำ |
+| ผล ablation เต็ม (D, G, H1–H5) | `eval/results/retrieval_*.csv` — n=50 (Recall@5/MRR/Hit@1): D 0.625/0.568/0.460, H2 (+RRF) 0.765/0.682/0.560, **H4 (+router ไม่ rerank) 0.755/0.732/0.660 สูงสุดที่ retrieval**, H5 (+rerank) 0.668/0.642/0.560; ระบบจริงคือ H5+safety-net เพราะ zone gate ใช้ rerank score และวัดถึงคำตอบแล้ว correctness 4.14 — H4 ยังไม่เคยวัดถึงคำตอบ |
 
 ## สิ่งที่ต้องแก้ก่อน export PNG หรือขึ้นนำเสนอ
 
