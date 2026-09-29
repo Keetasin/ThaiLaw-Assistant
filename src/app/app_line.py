@@ -60,7 +60,7 @@ def get_engine():
 
 
 def _state(user_id):
-    return _session_state.setdefault(user_id, {"mode": "hybrid", "provider": "local", "debug": False})
+    return _session_state.setdefault(user_id, {"mode": "hybrid", "provider": "api", "debug": False})
 
 
 def _handle_command(user_id, text):
