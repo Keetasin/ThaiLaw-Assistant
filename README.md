@@ -2,7 +2,9 @@
 
 ผู้ช่วยกฎหมายแรงงานไทยด้วย Hybrid Dense+Graph RAG บน LINE — ตอบคำถามจาก **พ.ร.บ.คุ้มครองแรงงาน พ.ศ. 2541** (ตัวบท + คู่มือ/FAQ ของกรมสวัสดิการและคุ้มครองแรงงาน) โดยผสาน Dense retrieval (ChromaDB + BM25) กับ Graph retrieval (เดินกราฟจาก `data/graph.json` ในหน่วยความจำ; Neo4j ใช้เก็บ/สำรวจกราฟและประวัติสนทนา) แล้วส่งเข้า LLM (Ollama local หรือ dotBlue API) เพื่อสร้างคำตอบพร้อมอ้างอิงมาตราจริง
 
-**เล่มรายงานฉบับสมบูรณ์**: `doc/Final_Report.docx` / `doc/Final_Report.pdf`
+**ผู้จัดทำ**: นายคีตศิลป์ คงสี (6610110425) · นายอลงกรณ์ จงยิ่งยศ (6610110693) — รายวิชา 241-351 Artificial Intelligences for Social Media Module
+
+**เล่มรายงานฉบับสมบูรณ์**: `doc/Final_Report_693-425.pdf`
 
 ---
 
@@ -170,7 +172,7 @@ python -m unittest discover -s tests
 
 ---
 
-## 6. Evaluation (Day 4-5 experiments)
+## 6. Evaluation
 
 ```bash
 # Retrieval ablation 9 configs (D, D+R, G, H1-H6) + dense tuning (top-k/threshold/rerank/chunking)
@@ -182,7 +184,7 @@ python -m eval.run_generation --all
 # LLM-as-judge scoring
 python -m eval.judge --score
 
-# (ทางเลือกเสริม ไม่บังคับตาม Rubric — เพิ่มความน่าเชื่อถือของ judge เฉยๆ)
+# (ทางเลือกเสริม: ตรวจความสอดคล้องของ judge กับผู้ประเมินที่เป็นมนุษย์)
 python -m eval.judge --validate 20   # เติมคะแนนคนด้วยมือใน eval/results/judge_validation_sample.csv แล้วรัน:
 python -m eval.judge --kappa
 
@@ -199,7 +201,7 @@ python -m eval.bench_latency
 jupyter nbconvert --to notebook --execute eval/analyze.ipynb
 ```
 
-ผลลัพธ์ทั้งหมดอยู่ใน `eval/results/*.csv` และรายงานสรุปใน `doc/Final_Report.docx`
+ผลลัพธ์ทั้งหมดอยู่ใน `eval/results/*.csv` และรายงานสรุปใน `doc/Final_Report_693-425.pdf`
 
 ---
 
@@ -208,11 +210,11 @@ jupyter nbconvert --to notebook --execute eval/analyze.ipynb
 ```text
 src/ingest/    ดึง+ทำความสะอาด+parse+chunk ข้อมูล
 src/index/     build vector/BM25/graph index, LLM triple extraction
-src/retrieval/ dense, graph, router (MoE), fusion (weighted RRF), rerank, context (Section Card)
+src/retrieval/ dense, graph, query router, fusion (weighted RRF + provenance-aware rerank), rerank, context (Section Card)
 src/llm/       client interface เดียวสำหรับ Ollama (native) + dotBlue (OpenAI SDK), retry, token accounting
 src/app/       Flask webhook, RAGEngine, Flex message, Neo4j chat history, tracing
 eval/          testset (50 ข้อ), retrieval/generation eval scripts, judge, analyze.ipynb
-doc/           เล่มรายงานฉบับสมบูรณ์ (Final_Report.docx/.pdf), โครงร่างรายงาน
+doc/           เล่มรายงานฉบับสมบูรณ์ (Final_Report_693-425.pdf)
 ```
 
 ---
