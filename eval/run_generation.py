@@ -110,6 +110,41 @@ class VRAMSampler:
             self._thread.join(timeout=2)
 
 
+class RAMSampler:
+    """Background psutil poll; tracks peak system RAM used (MiB) and peak RSS of
+    this process. System-wide on purpose: the local LLM runs in the separate
+    Ollama process, so this process's RSS alone would miss it."""
+
+    def __init__(self, interval: float = 0.5):
+        self.interval = interval
+        self.peak_system = 0
+        self.peak_rss = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _poll(self):
+        import psutil
+        proc = psutil.Process()
+        while not self._stop.is_set():
+            try:
+                self.peak_system = max(self.peak_system, psutil.virtual_memory().used // 2**20)
+                self.peak_rss = max(self.peak_rss, proc.memory_info().rss // 2**20)
+            except Exception:
+                pass
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+
 def write_csv(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(rows[0].keys()) if rows else ["id"]
@@ -125,22 +160,31 @@ def progress(tag, i, n, t_start):
     print(f"[progress] {tag} {i}/{n} ({i / n:.0%}) elapsed {el / 60:.1f} min, ETA ~{el / i * (n - i) / 60:.1f} min", flush=True)
 
 
-def run_matrix(rows: list[dict], output_dir: Path = RESULTS, only: str | None = None) -> None:
+def run_matrix(rows: list[dict], output_dir: Path = RESULTS, only: str | None = None, resume: bool = False, suffix: str = "") -> None:
     engine = RAGEngine()
     matrix = [m for m in MATRIX if m[0] == only] if only else MATRIX
     if only and not matrix:
         raise SystemExit(f"no matrix row labeled {only!r} (options: {[m[0] for m in MATRIX]})")
-    for label, mode, provider, model in matrix:
+    for base_label, mode, provider, model in matrix:
+        label = base_label + suffix  # e.g. "_v2" -> generation_H5_api_qwen-flash_v2.csv (same MATRIX row, other retrieval settings)
         if provider == "local":
             config.OLLAMA_MODEL = model
         else:
             config.DOTBLUE_MODEL = model
         print(f"[matrix] {label}: mode={mode} provider={provider} model={model}")
         vram = VRAMSampler() if provider == "local" else None
+        partial_path = output_dir / f"generation_{label}.partial.csv"
         out_rows = []
-        with (vram if vram else contextlib.nullcontext()):
+        if resume and partial_path.exists():
+            with partial_path.open(encoding="utf-8", newline="") as stream:
+                out_rows = list(csv.DictReader(stream))
+            print(f"[matrix] {label}: resuming with {len(out_rows)} finished rows from {partial_path.name}", flush=True)
+        done_ids = {r["id"] for r in out_rows}
+        with (vram if vram else contextlib.nullcontext()), RAMSampler() as ram:
             t_start = time.time()
             for i, row in enumerate(rows, 1):
+                if row["id"] in done_ids:
+                    continue
                 session_id = f"eval-{label}-{row['id']}"  # unique per row -> history always empty, no spurious rewrite
                 t0 = time.time()
                 try:
@@ -150,19 +194,24 @@ def run_matrix(rows: list[dict], output_dir: Path = RESULTS, only: str | None = 
                     answer, debug, error = "", {}, repr(exc)
                 elapsed = time.time() - t0
                 latency = debug.get("latency", {})
+                usage = debug.get("usage", {})
                 out_rows.append({
                     "id": row["id"], "category": row["category"], "config": label,
                     "mode": mode, "provider": provider, "model": model,
                     "zone": debug.get("zone"), "provider_fallback": debug.get("provider_fallback"),
                     "latency_total": latency.get("total", elapsed), "latency_generate": latency.get("generate"),
+                    "llm_calls": usage.get("llm_calls"), "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
                     "answer": answer, "error": error,
                     **citation_metrics(answer, row.get("gold_sections", [])),
+                    # peaks so far in this process; report the max over rows
+                    "peak_ram_system_mib": ram.peak_system, "peak_ram_process_mib": ram.peak_rss,
+                    **({"peak_vram_mib": vram.peak} if vram else {}),
                 })
-                progress(label, i, len(rows), t_start)
-        if vram:
-            for r in out_rows:
-                r["peak_vram_mib"] = vram.peak
+                write_csv(partial_path, out_rows)  # checkpoint: a crash must not lose finished rows
+                progress(label, len(out_rows), len(rows), t_start)
         write_csv(output_dir / f"generation_{label}.csv", out_rows)
+        partial_path.unlink(missing_ok=True)
     print("[matrix] done")
 
 
@@ -229,7 +278,8 @@ def run_no_rag(rows: list[dict], output_dir: Path = RESULTS, provider: str = "ap
             text, usage, error = "", {}, repr(exc)
         out_rows.append({
             "id": row["id"], "category": row["category"], "config": "no_rag",
-            "latency_s": (usage or {}).get("latency_s"), "answer": text, "error": error,
+            "latency_s": (usage or {}).get("latency_s"), "prompt_tokens": (usage or {}).get("prompt_tokens"),
+            "completion_tokens": (usage or {}).get("completion_tokens"), "answer": text, "error": error,
             **citation_metrics(text, row.get("gold_sections", [])),
         })
     write_csv(output_dir / "generation_no_rag.csv", out_rows)
@@ -251,7 +301,8 @@ def run_full_context(rows: list[dict], output_dir: Path = RESULTS, provider: str
         answer, _cited = generator.parse_citation(text, []) if text else (text, [])
         out_rows.append({
             "id": row["id"], "category": row["category"], "config": "full_context",
-            "latency_s": (usage or {}).get("latency_s"), "answer": answer, "error": error,
+            "latency_s": (usage or {}).get("latency_s"), "prompt_tokens": (usage or {}).get("prompt_tokens"),
+            "completion_tokens": (usage or {}).get("completion_tokens"), "answer": answer, "error": error,
             **citation_metrics(answer, row.get("gold_sections", [])),
         })
     write_csv(output_dir / "generation_full_context.csv", out_rows)
@@ -265,6 +316,8 @@ def main() -> None:
     parser.add_argument("--no-rag", action="store_true")
     parser.add_argument("--full-context", action="store_true")
     parser.add_argument("--all", action="store_true")
+    parser.add_argument("--suffix", default="", help="append to the output label, e.g. _v2 when RERANK_BLEND_* env vars are set")
+    parser.add_argument("--resume", action="store_true", help="continue from generation_<label>.partial.csv left by a crashed run")
     parser.add_argument("--sample", type=int, default=None, help="limit testset rows, for a quick smoke run")
     parser.add_argument("--label", default=None, help="run only this one MATRIX row (see MATRIX for valid labels) -- fresh process per label keeps peak RAM down on small machines")
     args = parser.parse_args()
@@ -273,7 +326,7 @@ def main() -> None:
 
     rows = load_rows(args.sample)
     if args.all or args.matrix:
-        run_matrix(rows, only=args.label)
+        run_matrix(rows, only=args.label, resume=args.resume, suffix=args.suffix)
     if args.all or args.num_ctx_sweep:
         run_num_ctx_sweep(rows)
     if args.all or args.no_rag:
