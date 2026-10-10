@@ -49,3 +49,5 @@ cloudflared.exe
 
 # --- Jupyter ---
 .ipynb_checkpoints/
+
+eval/results_offline/
