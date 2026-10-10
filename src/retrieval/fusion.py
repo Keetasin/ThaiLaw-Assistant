@@ -29,7 +29,7 @@ def _graph_chunk_ids(retriever, graph_retriever, query, pool, section_idx):
     return chunk_ids
 
 
-def hybrid_search(retriever, graph_retriever, query, route, pool=config.POOL, fuse_k=config.FUSE_K):
+def hybrid_search(retriever, graph_retriever, query, route, pool=config.POOL, fuse_k=config.FUSE_K, graph_ids_out=None):
     """4-way weighted RRF: dense/bm25-word/bm25-gram/graph, weighted by
     `route` (a router.RouteDecision) rather than the fixed 2.0/1.0/1.0
     weights `Retriever.search()` uses for dense-only mode. BM25's single
@@ -42,6 +42,8 @@ def hybrid_search(retriever, graph_retriever, query, route, pool=config.POOL, fu
     dense_ids, word_ids, gram_ids, _cosine = retriever.search_raw(query, pool)
     section_idx = _section_to_chunk_ids(retriever)
     graph_ids = _graph_chunk_ids(retriever, graph_retriever, query, pool, section_idx) if graph_retriever else []
+    if graph_ids_out is not None:
+        graph_ids_out.update(graph_ids)  # provenance for blend_rerank()
 
     fused = rrf([
         (dense_ids, route.alpha_dense),
@@ -51,6 +53,35 @@ def hybrid_search(retriever, graph_retriever, query, route, pool=config.POOL, fu
     ], k=fuse_k)
     hits = [retriever.chunks[cid] for cid, _ in fused if cid in retriever.chunks]
     return hits
+
+
+def blend_rerank(cands, ce_scores, graph_ids, k, w_prior, graph_bonus):
+    """Provenance-aware alternative to a pure cross-encoder cutoff.
+
+    The cross-encoder judges text similarity only: it cannot know a candidate
+    was confirmed by the graph (exact section number / Topic alias), so on
+    procedure/multi-hop questions it pushes graph-confirmed sections out of
+    top-k (doc report 4.4.2). Here each candidate's final score is
+
+        (1 - w_prior) * ce + w_prior * fusion_prior + graph_bonus * [from graph]
+
+    where fusion_prior = 1 - rank/len is the candidate's position in the
+    weighted-RRF/expansion order (the router's evidence is kept, not thrown
+    away), and graph_bonus rewards graph-confirmed chunks. Returns
+    (top-k candidates, max raw cross-encoder score) -- the raw CE max is what
+    the zone gate's TAU_* thresholds were calibrated on, so it is returned
+    unchanged.
+    """
+    n = len(cands)
+    if n == 0:
+        return [], 0.0
+    scored = []
+    for rank, (c, ce) in enumerate(zip(cands, ce_scores)):
+        prior = 1.0 - rank / n
+        bonus = graph_bonus if c["chunk_id"] in graph_ids else 0.0
+        scored.append(((1.0 - w_prior) * ce + w_prior * prior + bonus, rank, c))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [c for _s, _r, c in scored[:k]], float(max(ce_scores))
 
 
 _EXPAND_EDGE_TYPES = ("REFERS_TO", "PENALIZED_BY")
@@ -114,11 +145,15 @@ def ensure_graph_hits_survive(hits, retriever, graph_retriever, query, max_add=2
     Same append-only pattern as complete_penalty_partners, generalized to
     any graph-linked section rather than just PENALIZED_BY partners.
 
-    Returns (hits, added) -- `added` (count of newly-appended sections) lets
-    the caller know a *confident* (exact section-number/topic-alias, not
-    fuzzy semantic) graph match exists for this query even when the raw
-    rerank score is low, so the zone gate (TAU_REJECT/TAU_ANSWER) doesn't
-    have to rely on rerank score alone (doc/report.md: a real live-test case
+    Returns (hits, confirmed) -- `confirmed` is the number of graph-linked
+    sections (exact section-number/topic-alias, not fuzzy semantic) that end
+    up in `hits`, whether they were already there or were just appended. It
+    lets the caller know a *confident* graph match exists for this query
+    even when the raw rerank score is low, so the zone gate
+    (TAU_REJECT/TAU_ANSWER) doesn't have to rely on rerank score alone. (It
+    used to count only newly-appended sections, so an explicit "มาตรา 1
+    กำหนดเรื่องใด" whose section was already retrieved scored below
+    TAU_REJECT and was misrouted to general_knowledge.) (doc/report.md: a real live-test case
     -- "ต้องใช้หลักฐานอะไรเมื่อร้องเรียนค่าจ้างค้างจ่าย" -- had graph
     correctly find มาตรา 123 in `hits`, but the untouched rerank score still
     fell below TAU_REJECT, so the whole query got routed to
@@ -130,11 +165,13 @@ def ensure_graph_hits_survive(hits, retriever, graph_retriever, query, max_add=2
     present = {(h["law_id"], str(h["section_no"])) for h in hits}
     out = list(hits)
     added = 0
+    linked = []
     for sec in found.get("sections", []):
-        if added >= max_add:
-            break
         key = (sec.get("law_id"), str(sec.get("section_no", "")))
-        if not key[0] or key in present:
+        if not key[0]:
+            continue
+        linked.append(key)
+        if key in present or added >= max_add:
             continue
         for cid in section_idx.get(key, []):
             if cid not in retriever.chunks:
@@ -143,7 +180,7 @@ def ensure_graph_hits_survive(hits, retriever, graph_retriever, query, max_add=2
             present.add(key)
             added += 1
             break
-    return out, added
+    return out, sum(1 for key in linked if key in present)
 
 
 def complete_penalty_partners(hits, pool, graph, max_add=3):

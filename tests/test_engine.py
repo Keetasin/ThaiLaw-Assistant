@@ -180,6 +180,11 @@ ROUTE_STUB = RouteDecision(query_type="lookup", alpha_dense=0.2, alpha_bm25=0.4,
 
 class AnswerWithDebugHybridModeTests(unittest.TestCase):
     def setUp(self):
+        # these tests mock `rerank` (the pure cross-encoder path); the blend path has its own tests below
+        for name in ("RERANK_BLEND_W", "RERANK_GRAPH_BONUS"):
+            patcher = patch.object(config, name, 0.0)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.engine = make_engine()
         # non-None so `_generate`'s `self.graph_retriever.graph` access and
         # the `graph_seeded_expand` call both go through; the "missing
@@ -287,6 +292,25 @@ class AnswerWithDebugHybridModeTests(unittest.TestCase):
         mock_general.assert_not_called()
 
 
+class UsageAccountingTests(unittest.TestCase):
+    @patch("src.app.engine.generate")
+    @patch("src.app.engine.rerank")
+    @patch("src.app.engine.dynamic_k", return_value=(3, 4))
+    def test_debug_usage_sums_llm_calls_since_reset(self, _dk, mock_rerank, mock_generate):
+        from src.llm import client
+
+        def fake_generate(*_a, **_k):
+            client._record_usage({"prompt_tokens": 100, "completion_tokens": 20})
+            client._record_usage({"prompt_tokens": 50, "completion_tokens": None})
+            return "OK"
+
+        mock_rerank.return_value = ([hit()], config.TAU_ANSWER + 0.1)
+        mock_generate.side_effect = fake_generate
+        client._record_usage({"prompt_tokens": 999, "completion_tokens": 999})  # stale, must be dropped by reset
+        _out, debug = make_engine().answer_with_debug("q", provider="local", mode="dense")
+        self.assertEqual(debug["usage"], {"llm_calls": 2, "prompt_tokens": 150, "completion_tokens": 20})
+
+
 class LLMFallbackTests(unittest.TestCase):
     def setUp(self):
         self.engine = make_engine()
@@ -352,6 +376,32 @@ class LLMFallbackTests(unittest.TestCase):
         self.assertEqual(out, "REAL ANSWER\n\nที่มา: ...")
         self.assertTrue(debug["provider_fallback"])
         self.assertEqual(mock_generate.call_count, 2)
+
+
+class BlendRerankEngineTests(unittest.TestCase):
+    """retrieve_and_rerank_hybrid with RERANK_BLEND_* on: graph-confirmed candidate survives top-k,
+    and the zone-gate score stays the raw cross-encoder maximum."""
+
+    @patch("src.app.engine.rerank_scores")
+    @patch("src.app.engine.graph_seeded_expand")
+    @patch("src.app.engine.hybrid_search")
+    @patch("src.app.engine.classify_query", return_value=RouteDecision(query_type="general", alpha_dense=0.6, alpha_bm25=0.3, alpha_graph=0.1))
+    @patch("src.app.engine.dynamic_k", return_value=(2, 3))
+    def test_graph_confirmed_candidate_kept_and_score_is_raw_ce_max(self, _dk, _route, mock_hybrid, mock_expand, mock_scores):
+        cands = [{**hit(section_key=f"K{i}", section_no=str(i)), "chunk_id": f"c{i}"} for i in range(4)]
+
+        def fake_hybrid(*_a, graph_ids_out=None, **_k):
+            graph_ids_out.add("c3")  # last candidate, lowest CE score, but graph-confirmed
+            return cands
+        mock_hybrid.side_effect = fake_hybrid
+        mock_expand.return_value = (cands, [])
+        mock_scores.return_value = [0.5, 0.4, 0.3, 0.01]
+        engine = make_engine()
+        engine.graph_retriever = SimpleNamespace(graph={"nodes": [], "edges": []}, search=lambda *a, **k: {"sections": []})
+        with patch.object(config, "RERANK_BLEND_W", 0.0), patch.object(config, "RERANK_GRAPH_BONUS", 0.5):
+            hits, score, _route, _paths = engine.retrieve_and_rerank_hybrid("q", "hybrid")
+        self.assertIn("c3", [h["chunk_id"] for h in hits])
+        self.assertAlmostEqual(score, 0.5)
 
 
 if __name__ == "__main__":

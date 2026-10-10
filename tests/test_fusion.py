@@ -166,9 +166,17 @@ class EnsureGraphHitsSurviveTests(unittest.TestCase):
     def test_noop_when_already_present(self):
         retriever = _StubRetriever(CHUNKS, [], [], [])
         graph_retriever = _StubGraphRetriever([{"law_id": "LAW", "section_no": "1"}])
-        result, added = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q")
+        result, confirmed = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q")
         self.assertEqual([h["chunk_id"] for h in result], ["c1"])
-        self.assertEqual(added, 0)
+        # nothing appended, but the graph-linked section IS in hits -> still a confirmed match
+        # (explicit "มาตรา 1 ..." must not be misrouted to general_knowledge)
+        self.assertEqual(confirmed, 1)
+
+    def test_not_confirmed_when_graph_section_absent_from_chunks(self):
+        retriever = _StubRetriever(CHUNKS, [], [], [])
+        graph_retriever = _StubGraphRetriever([{"law_id": "LAW", "section_no": "999"}])
+        _result, confirmed = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q")
+        self.assertEqual(confirmed, 0)
 
     def test_respects_max_add(self):
         retriever = _StubRetriever(CHUNKS, [], [], [])
@@ -176,6 +184,40 @@ class EnsureGraphHitsSurviveTests(unittest.TestCase):
         result, added = ensure_graph_hits_survive([CHUNKS["c1"]], retriever, graph_retriever, "q", max_add=1)
         self.assertEqual(len(result), 2)
         self.assertEqual(added, 1)
+
+
+class BlendRerankTests(unittest.TestCase):
+    CANDS = [{"chunk_id": f"c{i}"} for i in range(4)]
+
+    def test_zero_prior_and_bonus_is_pure_cross_encoder_order(self):
+        from src.retrieval.fusion import blend_rerank
+        hits, top = blend_rerank(self.CANDS, [0.1, 0.9, 0.3, 0.2], set(), 3, 0.0, 0.0)
+        self.assertEqual([h["chunk_id"] for h in hits], ["c1", "c2", "c3"])
+        self.assertAlmostEqual(top, 0.9)
+
+    def test_graph_bonus_keeps_graph_confirmed_chunk_in_topk(self):
+        from src.retrieval.fusion import blend_rerank
+        # c3 has the lowest CE score but was confirmed by the graph
+        hits, top = blend_rerank(self.CANDS, [0.5, 0.4, 0.3, 0.05], {"c3"}, 2, 0.0, 0.5)
+        self.assertIn("c3", [h["chunk_id"] for h in hits])
+        self.assertAlmostEqual(top, 0.5)  # raw CE max, not the blended score
+
+    def test_prior_breaks_ties_in_favour_of_fusion_order(self):
+        from src.retrieval.fusion import blend_rerank
+        hits, _ = blend_rerank(self.CANDS, [0.2, 0.2, 0.2, 0.2], set(), 2, 0.5, 0.0)
+        self.assertEqual([h["chunk_id"] for h in hits], ["c0", "c1"])
+
+    def test_empty_candidates(self):
+        from src.retrieval.fusion import blend_rerank
+        self.assertEqual(blend_rerank([], [], set(), 3, 0.3, 0.1), ([], 0.0))
+
+    def test_hybrid_search_reports_graph_provenance(self):
+        retriever = _StubRetriever(CHUNKS, dense_ids=["c1"], word_ids=["c2"], gram_ids=[])
+        graph_retriever = _StubGraphRetriever([{"law_id": "LAW", "section_no": "3"}])
+        route = RouteDecision(query_type="lookup", alpha_dense=0.3, alpha_bm25=0.1, alpha_graph=0.6)
+        ids = set()
+        hybrid_search(retriever, graph_retriever, "q", route, graph_ids_out=ids)
+        self.assertEqual(ids, {"c3"})
 
 
 if __name__ == "__main__":

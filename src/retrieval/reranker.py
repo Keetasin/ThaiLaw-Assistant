@@ -46,6 +46,16 @@ def rerank(query, candidates, k=config.RERANK_K):
     return hits, top_score
 
 
+def rerank_scores(query, candidates):
+    """Cross-encoder score for every candidate, aligned with `candidates` order
+    (no sorting/cutoff) -- lets callers blend the score with other evidence
+    (see fusion.blend_rerank) instead of letting it decide the cutoff alone."""
+    if not candidates:
+        return []
+    ce = _get_model()
+    return [float(x) for x in ce.predict([(query, passage_text(c)) for c in candidates])]
+
+
 def check_score_range():
     """Confirm scores are 0-1 (sigmoid), not raw logits, before trusting any
     TAU_* threshold in config.py."""

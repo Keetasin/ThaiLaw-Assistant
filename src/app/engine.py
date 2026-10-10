@@ -25,11 +25,11 @@ from collections import Counter
 from src import config
 from src.app.generator import generate, generate_from_cards, generate_general_knowledge
 from src.app.tracing import log_trace
-from src.llm.client import get_llm
+from src.llm.client import collect_usage, get_llm, reset_usage
 from src.retrieval.context import build_section_cards
-from src.retrieval.fusion import complete_penalty_partners, ensure_graph_hits_survive, graph_seeded_expand, hybrid_search
+from src.retrieval.fusion import blend_rerank, complete_penalty_partners, ensure_graph_hits_survive, graph_seeded_expand, hybrid_search
 from src.retrieval.graph import GraphRetriever, infer_query_type, load_aliases
-from src.retrieval.reranker import rerank
+from src.retrieval.reranker import rerank, rerank_scores
 from src.retrieval.retriever import Retriever, dynamic_k
 from src.retrieval.router import RouteDecision, classify_query
 
@@ -211,14 +211,19 @@ class RAGEngine:
             rerank_k, fuse_k = max(rerank_k, 10), max(fuse_k, 15)
 
         t0 = time.time()
-        cands = hybrid_search(self.retriever, self.graph_retriever, q, route, fuse_k=fuse_k)
+        graph_ids = set()
+        cands = hybrid_search(self.retriever, self.graph_retriever, q, route, fuse_k=fuse_k, graph_ids_out=graph_ids)
         t1 = time.time()
         if self.graph_retriever is not None:
             cands, graph_paths = graph_seeded_expand(cands, self.graph_retriever.graph, self.retriever)
         else:
             graph_paths = []
         t2 = time.time()
-        hits, score = rerank(q, cands, k=rerank_k)
+        if config.RERANK_BLEND_W > 0 or config.RERANK_GRAPH_BONUS > 0:
+            ce = rerank_scores(q, cands)
+            hits, score = blend_rerank(cands, ce, graph_ids, rerank_k, config.RERANK_BLEND_W, config.RERANK_GRAPH_BONUS)
+        else:
+            hits, score = rerank(q, cands, k=rerank_k)
         if self.graph_retriever is not None:
             # multi-hop content+penalty pairs: rerank alone tends to drop
             # one half (doc/report.md §3.2 point 3) -- widens context only,
@@ -326,6 +331,7 @@ class RAGEngine:
     def answer_with_debug(self, q, session_id="default", provider="local", mode="hybrid"):
         q = clean_query(q)
         hist = self._get_history(session_id)
+        reset_usage()
         t_start = time.time()
         timing = {}
 
@@ -381,6 +387,7 @@ class RAGEngine:
             "provider": provider_used,
             "provider_fallback": provider_used != provider,
             "general_knowledge": general_knowledge,
+            "usage": collect_usage(),
         }
         try:
             log_trace(

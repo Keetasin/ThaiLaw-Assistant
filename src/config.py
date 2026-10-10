@@ -56,3 +56,8 @@ TAU_ANSWER = float(os.getenv("TAU_ANSWER", "0.093"))
 TAU_REJECT = float(os.getenv("TAU_REJECT", "0.05"))
 EMBED_DEVICE = os.getenv("EMBED_DEVICE", "cuda")
 RERANK_DEVICE = os.getenv("RERANK_DEVICE", "cpu")
+# Provenance-aware rerank (fusion.blend_rerank). 0/0 = pure cross-encoder cutoff
+# (the original v1 behaviour); 0.3/0.3 = v2. Tuned on testset_a, validated on held-out testset_b
+# -- see report section 4.4.4 and eval/tune_rerank_blend.py.
+RERANK_BLEND_W = float(os.getenv("RERANK_BLEND_W", "0.3"))
+RERANK_GRAPH_BONUS = float(os.getenv("RERANK_GRAPH_BONUS", "0.3"))

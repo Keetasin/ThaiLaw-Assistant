@@ -9,6 +9,7 @@ and not worth gambling on — see doc/PLAN.md's Day-1 plan notes. Both
 backends expose the same `.chat(messages, **opts) -> (text, usage)` so
 call sites don't care which one they're talking to.
 """
+import threading
 import time
 
 import ollama
@@ -16,6 +17,33 @@ from openai import OpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src import config
+
+# Per-thread token tally across every .chat() call (rewrite, normalize,
+# generate, provider fallback) so engine.answer_with_debug() can report the
+# true token cost of one user question without threading `usage` back up
+# through every call site. app_line.py answers each message on its own
+# thread, so thread-local keeps concurrent users' tallies apart.
+_usage_local = threading.local()
+
+
+def reset_usage():
+    _usage_local.calls = []
+
+
+def collect_usage():
+    """Sum of prompt/completion tokens over the calls since reset_usage()."""
+    calls = getattr(_usage_local, "calls", [])
+    return {
+        "llm_calls": len(calls),
+        "prompt_tokens": sum(c.get("prompt_tokens") or 0 for c in calls),
+        "completion_tokens": sum(c.get("completion_tokens") or 0 for c in calls),
+    }
+
+
+def _record_usage(usage):
+    if not hasattr(_usage_local, "calls"):
+        _usage_local.calls = []
+    _usage_local.calls.append(usage)
 
 
 class OllamaClient:
@@ -38,6 +66,7 @@ class OllamaClient:
             "completion_tokens": resp.get("eval_count"),
             "latency_s": latency,
         }
+        _record_usage(usage)
         return text, usage
 
 
@@ -84,6 +113,7 @@ class DotBlueClient:
             "completion_tokens": usage.completion_tokens if usage else None,
             "latency_s": latency,
         }
+        _record_usage(usage_dict)
         return text, usage_dict
 
 
